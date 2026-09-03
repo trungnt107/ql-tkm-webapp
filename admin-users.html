@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Quản lý người dùng — QL Tiến độ Dự án TKM</title>
+<style>
+  :root{--navy:#0f2f5b;--accent:#2563eb;--border:#e2e6ec;--bg:#f4f6f9;--text:#1f2430;--muted:#6b7280}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text)}
+  header{background:var(--navy);color:#fff;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+  header a{color:#bfdbfe;text-decoration:none;font-size:13px;font-weight:600}
+  main{max-width:960px;margin:24px auto;padding:0 16px}
+  .panel{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 2px rgba(16,24,40,.06)}
+  h2{margin:0 0 14px;font-size:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  input,select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;font-size:13px;width:100%}
+  label{font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:end}
+  button{padding:8px 14px;border-radius:7px;border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:600;font-size:12.5px}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;background:#eff4ff;color:var(--accent)}
+  .msg{font-size:12.5px;margin-top:8px}
+  .msg.err{color:#dc2626}
+  .msg.ok{color:#15803d}
+  .muted{color:var(--muted);font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px}
+  .chip{font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer;user-select:none}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div><b>⚙ Quản lý người dùng</b> — QL Tiến độ Dự án TKM</div>
+  <a href="/">← Về trang chính</a>
+</header>
+<main>
+  <div class="panel">
+    <h2>Tạo tài khoản mới</h2>
+    <div class="grid">
+      <div><label>Tên đăng nhập</label><input id="f_username" /></div>
+      <div><label>Họ tên hiển thị</label><input id="f_display" /></div>
+      <div><label>Mật khẩu</label><input id="f_password" type="password" /></div>
+      <div><label>Vai trò</label>
+        <select id="f_role">
+          <option value="admin">Quản trị viên (toàn quyền)</option>
+          <option value="manager">Quản lý (tạo/sửa/duyệt mọi dự án)</option>
+          <option value="responsible" selected>Người phụ trách (chỉ sửa dự án được giao)</option>
+          <option value="viewer">Người xem (chỉ xem)</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:12px"><button class="primary" id="btnCreate">+ Tạo tài khoản</button></div>
+    <div class="msg" id="createMsg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Danh sách tài khoản</h2>
+    <table>
+      <thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Trạng thái</th><th>Ngày tạo</th><th></th></tr></thead>
+      <tbody id="userTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="assignPanel" style="display:none">
+    <h2>Phân công dự án cho: <span id="assignUserName"></span></h2>
+    <p class="muted">Chỉ áp dụng với vai trò "Người phụ trách" — họ chỉ sửa được các dự án chi tiết được tick chọn dưới đây.</p>
+    <div class="chips" id="assignChips"></div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button class="primary" id="btnSaveAssign">Lưu phân công</button>
+      <button id="btnCancelAssign">Đóng</button>
+    </div>
+    <div class="msg" id="assignMsg"></div>
+  </div>
+</main>
+
+<script>
+var ROLE_LABEL = {admin:"Quản trị viên", manager:"Quản lý", responsible:"Người phụ trách", viewer:"Người xem"};
+var allProjects = [];
+
+function api(url, opts) {
+  return fetch(url, Object.assign({headers:{"Content-Type":"application/json"}}, opts || {}))
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||"Lỗi"); return j; }); });
+}
+
+function loadUsers() {
+  api("/api/users").then(function(data){
+    var tbody = document.getElementById("userTbody");
+    tbody.innerHTML = "";
+    data.users.forEach(function(u){
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>"+u.username+"</td>"+
+        "<td>"+u.display_name+"</td>"+
+        "<td><span class='badge'>"+u.role_label+"</span></td>"+
+        "<td>"+(u.active? "Đang hoạt động" : "Đã khóa")+"</td>"+
+        "<td class='muted'>"+(u.created_at||"").slice(0,10)+"</td>"+
+        "<td></td>";
+      var tdActions = tr.lastElementChild;
+
+      if (u.role === "responsible") {
+        var assignBtn = document.createElement("button");
+        assignBtn.textContent = "Phân công dự án";
+        assignBtn.onclick = function(){ openAssign(u); };
+        tdActions.appendChild(assignBtn);
+      }
+      var toggleBtn = document.createElement("button");
+      toggleBtn.textContent = u.active ? "Khóa" : "Mở khóa";
+      toggleBtn.style.marginLeft = "6px";
+      toggleBtn.onclick = function(){
+        api("/api/users/"+u.id, {method:"PUT", body: JSON.stringify({active: !u.active})}).then(loadUsers);
+      };
+      tdActions.appendChild(toggleBtn);
+
+      var resetBtn = document.createElement("button");
+      resetBtn.textContent = "Đặt lại mật khẩu";
+      resetBtn.style.marginLeft = "6px";
+      resetBtn.onclick = function(){
+        var pw = prompt("Mật khẩu mới cho " + u.username + " (tối thiểu 6 ký tự):");
+        if (!pw) return;
+        api("/api/users/"+u.id, {method:"PUT", body: JSON.stringify({password: pw})})
+          .then(function(){ alert("Đã đặt lại mật khẩu."); })
+          .catch(function(e){ alert(e.message); });
+      };
+      tdActions.appendChild(resetBtn);
+
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e){ alert(e.message); });
+}
+
+document.getElementById("btnCreate").addEventListener("click", function(){
+  var payload = {
+    username: document.getElementById("f_username").value.trim(),
+    display_name: document.getElementById("f_display").value.trim(),
+    password: document.getElementById("f_password").value,
+    role: document.getElementById("f_role").value,
+  };
+  var msg = document.getElementById("createMsg");
+  msg.className = "msg"; msg.textContent = "";
+  api("/api/users", {method:"POST", body: JSON.stringify(payload)})
+    .then(function(){
+      msg.className = "msg ok"; msg.textContent = "Đã tạo tài khoản.";
+      document.getElementById("f_username").value = "";
+      document.getElementById("f_display").value = "";
+      document.getElementById("f_password").value = "";
+      loadUsers();
+    })
+    .catch(function(e){ msg.className = "msg err"; msg.textContent = e.message; });
+});
+
+function openAssign(user) {
+  document.getElementById("assignPanel").style.display = "block";
+  document.getElementById("assignUserName").textContent = user.display_name + " (" + user.username + ")";
+  var chipsEl = document.getElementById("assignChips");
+  chipsEl.innerHTML = "Đang tải...";
+  Promise.all([
+    allProjects.length ? Promise.resolve({projects: allProjects}) : api("/api/projects-list-for-assignment"),
+    api("/api/members/" + user.id),
+  ]).then(function(res){
+    allProjects = res[0].projects;
+    var assigned = res[1].project_codes;
+    chipsEl.innerHTML = "";
+    allProjects.filter(function(p){ return p.parent_code; }).forEach(function(p){
+      var chip = document.createElement("div");
+      chip.className = "chip" + (assigned.indexOf(p.code) !== -1 ? " on" : "");
+      chip.textContent = p.code + " — " + p.name;
+      chip.dataset.code = p.code;
+      chip.onclick = function(){ chip.classList.toggle("on"); };
+      chipsEl.appendChild(chip);
+    });
+    document.getElementById("btnSaveAssign").onclick = function(){
+      var codes = Array.prototype.slice.call(chipsEl.querySelectorAll(".chip.on")).map(function(c){ return c.dataset.code; });
+      api("/api/members/" + user.id, {method:"PUT", body: JSON.stringify({project_codes: codes})})
+        .then(function(){
+          document.getElementById("assignMsg").className = "msg ok";
+          document.getElementById("assignMsg").textContent = "Đã lưu phân công.";
+        })
+        .catch(function(e){
+          document.getElementById("assignMsg").className = "msg err";
+          document.getElementById("assignMsg").textContent = e.message;
+        });
+    };
+  });
+}
+document.getElementById("btnCancelAssign").addEventListener("click", function(){
+  document.getElementById("assignPanel").style.display = "none";
+});
+
+// Chan truy cap neu khong phai admin
+api("/api/auth/me").then(function(d){
+  if (!d.user || d.user.role !== "admin") {
+    document.body.innerHTML = "<div style='padding:40px;text-align:center'>Bạn không có quyền truy cập trang này. <a href='/'>Về trang chính</a></div>";
+    return;
+  }
+  loadUsers();
+}).catch(function(){ location.href = "/"; });
+</script>
+</body>
+</html>

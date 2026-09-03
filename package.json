@@ -1,0 +1,16 @@
+{
+  "name": "ql-tkm-webapp",
+  "version": "2.0.0",
+  "private": true,
+  "description": "QL Tien do Du an TKM - Web App quan ly du an dung chung (Node 22+, SQLite, dang nhap/phan quyen, lich su thay doi, canh bao xung dot, thong bao du lieu moi).",
+  "main": "server.js",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "start": "node --no-warnings server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6"
+  }
+}
