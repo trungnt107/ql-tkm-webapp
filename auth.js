@@ -95,8 +95,63 @@ function canEditProject(user, projectCode) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Phan quyen chi tiet theo TUNG DU AN (ACL) - chi tac dong voi vai tro
+// 'responsible' va 'viewer'. admin/manager luon FULL tren moi du an, khong
+// doi so voi truoc day (khong pha vo hanh vi dang chay tren production).
+// ---------------------------------------------------------------------------
+const PERMISSION_RANK = { VIEW: 1, UPDATE: 2, MANAGE: 3, FULL: 4 };
+const PERMISSION_LABELS = {
+  NONE: "Không có quyền",
+  VIEW: "Chỉ xem",
+  UPDATE: "Cập nhật tiến độ",
+  MANAGE: "Quản lý dự án",
+  FULL: "Toàn quyền dự án",
+};
+
+// Tra ve 'FULL' (admin/manager), mot trong 4 muc VIEW/UPDATE/MANAGE/FULL neu
+// user (vai tro responsible/viewer) duoc cap quyen tren dung du an nay, hoac
+// null neu khong duoc cap quyen gi ca (tuc la: khong duoc thay du an nay).
+function getProjectPermission(user, projectCode) {
+  if (!user) return null;
+  if (user.role === "admin" || user.role === "manager") return "FULL";
+  const row = db
+    .prepare("SELECT permission_level FROM user_project_permissions WHERE user_id = ? AND project_code = ?")
+    .get(user.id, projectCode);
+  return row ? row.permission_level : null;
+}
+function hasProjectPermissionAtLeast(user, projectCode, minLevel) {
+  const level = getProjectPermission(user, projectCode);
+  if (!level) return false;
+  return PERMISSION_RANK[level] >= PERMISSION_RANK[minLevel];
+}
+function canViewProject(user, projectCode) {
+  return hasProjectPermissionAtLeast(user, projectCode, "VIEW");
+}
+function canUpdateProject(user, projectCode) {
+  // Duoc sua tien do/trang thai/vuong mac.
+  return hasProjectPermissionAtLeast(user, projectCode, "UPDATE");
+}
+function canManageProjectFull(user, projectCode) {
+  // Duoc sua thong tin quan trong, quan ly cong viec, quan ly vat tu.
+  return hasProjectPermissionAtLeast(user, projectCode, "MANAGE");
+}
+function canDeleteProjectAcl(user, projectCode) {
+  return hasProjectPermissionAtLeast(user, projectCode, "FULL");
+}
+// Danh sach ma du an ma user duoc THAY (VIEW tro len). admin/manager: null
+// nghia la "tat ca" (khong loc).
+function visibleProjectCodesFor(user) {
+  if (!user) return [];
+  if (user.role === "admin" || user.role === "manager") return null;
+  const rows = db.prepare("SELECT project_code FROM user_project_permissions WHERE user_id = ?").all(user.id);
+  return rows.map((r) => r.project_code);
+}
+
 module.exports = {
   ROLE_LABELS,
+  PERMISSION_RANK,
+  PERMISSION_LABELS,
   findUserByUsername,
   findUserById,
   createSession,
@@ -107,5 +162,12 @@ module.exports = {
   requireAuth,
   requireRole,
   canEditProject,
+  getProjectPermission,
+  hasProjectPermissionAtLeast,
+  canViewProject,
+  canUpdateProject,
+  canManageProjectFull,
+  canDeleteProjectAcl,
+  visibleProjectCodesFor,
   bcrypt,
 };
