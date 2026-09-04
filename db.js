@@ -129,6 +129,27 @@ CREATE TABLE IF NOT EXISTS project_members (
 CREATE INDEX IF NOT EXISTS idx_members_project ON project_members(project_code);
 CREATE INDEX IF NOT EXISTS idx_members_user ON project_members(user_id);
 
+-- Phan quyen chi tiet theo TUNG DU AN cho tung nguoi dung (RBAC nang cao).
+-- Chi ap dung cho vai tro 'responsible' va 'viewer' - admin/manager luon
+-- toan quyen moi du an nhu truoc, khong bi anh huong boi bang nay.
+-- permission_level, tu thap den cao:
+--   VIEW   : chi xem du an (thong tin, tien do, cong viec, vuong mac)
+--   UPDATE : xem + cap nhat tien do/trang thai/vuong mac (khong sua thong
+--            tin quan trong, khong dong/sua danh sach cong viec, khong vat tu)
+--   MANAGE : xem + sua thong tin du an + quan ly cong viec + quan ly vat tu
+--   FULL   : nhu MANAGE, cong them duoc xoa chinh du an chi tiet nay
+CREATE TABLE IF NOT EXISTS user_project_permissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_code TEXT NOT NULL REFERENCES projects(code) ON DELETE CASCADE,
+  permission_level TEXT NOT NULL CHECK(permission_level IN ('VIEW','UPDATE','MANAGE','FULL')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, project_code)
+);
+CREATE INDEX IF NOT EXISTS idx_upp_user ON user_project_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_upp_project ON user_project_permissions(project_code);
+
 CREATE TABLE IF NOT EXISTS project_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_code TEXT,
@@ -236,6 +257,26 @@ function seedIfNew() {
   console.log("Đã tạo xong database. Tài khoản đăng nhập đầu tiên: admin / admin123 (đổi mật khẩu ngay).");
 }
 
+// ---------------------------------------------------------------------------
+// Nang cap du lieu cu (idempotent, an toan chay lai nhieu lan): moi ban ghi
+// project_members (phan cong kieu cu, chi co "duoc sua hay khong") duoc quy
+// doi sang 1 dong trong user_project_permissions voi muc UPDATE - dung bang
+// muc quyen chinh sua ma nguoi "phu trach" dang co truoc day, de khong ai bi
+// mat quyen dang dung khi nang cap len ban co ACL chi tiet nay.
+// ---------------------------------------------------------------------------
+function migrateLegacyMembersToPermissions() {
+  const legacyRows = db.prepare("SELECT project_code, user_id FROM project_members").all();
+  if (!legacyRows.length) return;
+  const ts = new Date().toISOString();
+  const ins = db.prepare(
+    `INSERT INTO user_project_permissions (user_id, project_code, permission_level, created_at, updated_at)
+     VALUES (?,?,'UPDATE',?,?)
+     ON CONFLICT(user_id, project_code) DO NOTHING`
+  );
+  for (const r of legacyRows) ins.run(r.user_id, r.project_code, ts, ts);
+}
+
 seedIfNew();
+migrateLegacyMembersToPermissions();
 
 module.exports = { db };
