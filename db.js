@@ -168,6 +168,35 @@ CREATE TABLE IF NOT EXISTS categories (
   value TEXT NOT NULL,
   UNIQUE(cat_key, value)
 );
+
+-- Bang tien do CHI TIET theo tung dau muc cong viec (WBS) cua 1 du an chi
+-- tiet - day chinh la "bang tien do chi tiet" da co san tu file Excel goc
+-- (4 giai doan x nhieu dau muc, moi dau muc co trong so weight_pct rieng,
+-- cong don lai dung 100% cho ca du an). % hoan thanh CHUNG cua du an =
+-- SUM(weight_pct * pct_done) tren toan bo cac dong cua du an do - xem ham
+-- computeProgressFromBreakdown() trong server.js. Sua pct_done/status o day
+-- se tu dong tinh lai % hoan thanh chung, khong con phai keo tay nua.
+CREATE TABLE IF NOT EXISTS project_progress_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_code TEXT NOT NULL REFERENCES projects(code) ON DELETE CASCADE,
+  stage_no INTEGER NOT NULL,
+  stage_name TEXT NOT NULL,
+  stt INTEGER NOT NULL,
+  task_name TEXT NOT NULL,
+  unit TEXT,
+  weight_pct REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'Chưa thực hiện',
+  pct_done REAL NOT NULL DEFAULT 0,
+  planned_start TEXT,
+  planned_end TEXT,
+  actual_start TEXT,
+  actual_end TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_code, stt)
+);
+CREATE INDEX IF NOT EXISTS idx_ppt_project ON project_progress_tasks(project_code);
 `);
 
 // ---------------------------------------------------------------------------
@@ -276,7 +305,75 @@ function migrateLegacyMembersToPermissions() {
   for (const r of legacyRows) ins.run(r.user_id, r.project_code, ts, ts);
 }
 
+// ---------------------------------------------------------------------------
+// Nap bang tien do chi tiet (WBS) tu du lieu Excel goc (raw_excel_json) vao
+// bang project_progress_tasks - CHI chay cho nhung du an CHUA co dong nao
+// trong bang moi (idempotent: an toan chay lai nhieu lan, khong doi lai du
+// lieu da tung duoc admin/nguoi dung sua qua giao dien moi).
+// ---------------------------------------------------------------------------
+function migrateProgressBreakdownFromExcel() {
+  const children = db
+    .prepare("SELECT code, raw_excel_json FROM projects WHERE parent_code IS NOT NULL AND source = 'excel' AND raw_excel_json IS NOT NULL")
+    .all();
+  if (!children.length) return;
+  const already = new Set(db.prepare("SELECT DISTINCT project_code FROM project_progress_tasks").all().map((r) => r.project_code));
+  const ts = new Date().toISOString();
+  const ins = db.prepare(
+    `INSERT INTO project_progress_tasks
+       (project_code, stage_no, stage_name, stt, task_name, unit, weight_pct, status, pct_done,
+        planned_start, planned_end, actual_start, actual_end, note, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(project_code, stt) DO NOTHING`
+  );
+  let migratedCount = 0;
+  db.exec("BEGIN");
+  try {
+    for (const row of children) {
+      if (already.has(row.code)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(row.raw_excel_json);
+      } catch {
+        continue;
+      }
+      const stages = parsed && parsed.detail && Array.isArray(parsed.detail.stages) ? parsed.detail.stages : null;
+      if (!stages || !stages.length) continue;
+      stages.forEach((stage, stageIdx) => {
+        (stage.tasks || []).forEach((t) => {
+          ins.run(
+            row.code,
+            stageIdx + 1,
+            stage.stage_name || `Giai đoạn ${stageIdx + 1}`,
+            t.stt ?? 0,
+            t.task_name || "",
+            t.unit || null,
+            typeof t.weight_pct === "number" ? t.weight_pct : 0,
+            t.status || "Chưa thực hiện",
+            typeof t.pct_done === "number" ? t.pct_done : 0,
+            t.planned_start || null,
+            t.planned_end || null,
+            t.actual_start || null,
+            t.actual_end || null,
+            t.description || null,
+            ts,
+            ts
+          );
+        });
+      });
+      migratedCount++;
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  if (migratedCount) {
+    console.log(`Đã nạp bảng tiến độ chi tiết (WBS) từ Excel gốc cho ${migratedCount} dự án chi tiết.`);
+  }
+}
+
 seedIfNew();
 migrateLegacyMembersToPermissions();
+migrateProgressBreakdownFromExcel();
 
 module.exports = { db };
