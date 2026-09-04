@@ -239,6 +239,7 @@
     });
     scanDetailHeader();
     patchPctSlider();
+    patchTopKmChart();
   }
 
   // Quan sat menu "⋮" (Xem chi tiết / Chỉnh sửa / Nhân bản dự án) moi khi no
@@ -407,6 +408,79 @@
         label2.appendChild(note);
       }
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Bieu do "Top dự án tổng theo tổng KM cáp kế hoạch" o trang Dashboard la
+  // mot chart Recharts nam trong phan bundle React da dong goi/thu nho -
+  // khong the sua truc tiep an toan (Recharts tinh lai toan bo SVG moi lan
+  // render, gan chat voi vi tri/du lieu tung cot qua closure; tu y doi thu
+  // tu DOM se lam sai lech tooltip/nut bam so voi du lieu that). Vi vay:
+  // AN chart goc di, roi ve THAY THE bang 1 chart tu viet (cung du lieu Top
+  // 12 theo KM ke hoach nhu ban goc) nhung hien thi theo thu tu MA du an
+  // tang dan, va tu gan hanh vi bam-cot-de-mo-du-an-tong.
+  // ---------------------------------------------------------------------
+  var TOP_KM_HEADING_PREFIX = "Top dự án tổng theo tổng KM cáp kế hoạch";
+  function qltkmFindTopKmPanel() {
+    var hs = document.querySelectorAll("h3");
+    for (var i = 0; i < hs.length; i++) {
+      if ((hs[i].textContent || "").indexOf(TOP_KM_HEADING_PREFIX) === 0) return hs[i].parentElement;
+    }
+    return null;
+  }
+  function patchTopKmChart() {
+    if (!CURRENT_USER) return;
+    var panel = qltkmFindTopKmPanel();
+    if (!panel || panel.querySelector("[data-qltkm-topkm-chart]")) return;
+    var original = panel.querySelector(".recharts-responsive-container");
+    if (!original) return; // chart React chua render xong, cho lan quet sau
+
+    realFetch("/api/bootstrap")
+      .then(function (r) { return r.json(); })
+      .then(function (boot) {
+        var panel2 = qltkmFindTopKmPanel(); // tim lai: DOM co the da doi trong luc cho fetch
+        if (!panel2 || panel2.querySelector("[data-qltkm-topkm-chart]")) return;
+        var orig2 = panel2.querySelector(".recharts-responsive-container");
+        if (!orig2) return;
+
+        var parents = (boot.parents || []).map(function (p) {
+          return { code: p.parent_code, name: p.parent_name || p.parent_code, km: Number(p.cable_km_total) || 0 };
+        });
+        // giu dung tieu chi "Top 12" nhu bieu do goc: lay 12 du an co KM ke
+        // hoach cao nhat, roi sap xep lai theo MA du an tang dan de hien thi.
+        var top = parents.slice().sort(function (a, b) { return b.km - a.km; }).slice(0, 12);
+        top.sort(function (a, b) { return a.code.localeCompare(b.code); });
+        if (!top.length) return;
+
+        orig2.style.display = "none";
+        var maxKm = Math.max.apply(null, top.map(function (x) { return x.km; })) || 1;
+        var wrap = document.createElement("div");
+        wrap.setAttribute("data-qltkm-topkm-chart", "1");
+        wrap.style.cssText = "display:flex;align-items:flex-end;gap:10px;height:320px;padding:14px 4px 0;overflow-x:auto;";
+        top.forEach(function (it) {
+          var col = document.createElement("div");
+          col.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:flex-end;flex:1;min-width:56px;height:100%;cursor:pointer;";
+          col.title = it.code + " — " + it.name + " (bấm để mở dự án tổng)";
+          var valLabel = document.createElement("div");
+          valLabel.textContent = (Math.round(it.km * 10) / 10) + " km";
+          valLabel.style.cssText = "font-size:11px;color:#374151;margin-bottom:4px;white-space:nowrap;";
+          var bar = document.createElement("div");
+          var barH = Math.max(4, Math.round((it.km / maxKm) * 230));
+          bar.style.cssText = "width:32px;height:" + barH + "px;background:#2563eb;border-radius:4px 4px 0 0;transition:background .1s;";
+          var codeLabel = document.createElement("div");
+          codeLabel.textContent = it.code;
+          codeLabel.style.cssText = "font-size:11px;color:#6b7280;margin-top:6px;white-space:nowrap;";
+          col.appendChild(valLabel);
+          col.appendChild(bar);
+          col.appendChild(codeLabel);
+          col.addEventListener("mouseenter", function () { bar.style.background = "#1d4ed8"; });
+          col.addEventListener("mouseleave", function () { bar.style.background = "#2563eb"; });
+          col.addEventListener("click", function () { location.hash = "#/projects/" + encodeURIComponent(it.code); });
+          wrap.appendChild(col);
+        });
+        panel2.appendChild(wrap);
+      })
+      .catch(function () {}); // im lang bo qua - lan quet sau se thu lai
   }
 
   var mo = new MutationObserver(function (mutations) {
