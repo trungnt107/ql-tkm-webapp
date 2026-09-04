@@ -238,6 +238,7 @@
       }
     });
     scanDetailHeader();
+    patchPctSlider();
   }
 
   // Quan sat menu "⋮" (Xem chi tiết / Chỉnh sửa / Nhân bản dự án) moi khi no
@@ -345,6 +346,67 @@
         break;
       }
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Form "✎ Chỉnh sửa" (chung) van con o input "% hoan thanh" (thanh
+  // truot). Voi du an da co "bang Tien do chi tiet" (WBS), server luon BO
+  // QUA gia tri nguoi dung go o day khi luu (xem PUT /api/projects/:code)
+  // - vi vay khoa han thanh truot nay lai + chu thich ro, thay vi de nguoi
+  // dung tuong nham la sua duoc nhung luu roi lai khong thay doi gi.
+  // ---------------------------------------------------------------------
+  var qltkmBreakdownCache = {}; // code -> true/false (da biet du an co bang WBS hay khong)
+  function qltkmCheckBreakdown(code, cb) {
+    if (Object.prototype.hasOwnProperty.call(qltkmBreakdownCache, code)) {
+      cb(qltkmBreakdownCache[code]);
+      return;
+    }
+    realFetch("/api/projects/" + encodeURIComponent(code) + "/progress-tasks")
+      .then(function (r) {
+        qltkmBreakdownCache[code] = r.ok;
+        cb(r.ok);
+      })
+      .catch(function () {
+        cb(false);
+      });
+  }
+  function qltkmFindPctSliderLabel() {
+    var labels = document.querySelectorAll("label");
+    for (var i = 0; i < labels.length; i++) {
+      var span = labels[i].querySelector("span");
+      if (span && (span.textContent || "").indexOf("% hoàn thành") === 0) return labels[i];
+    }
+    return null;
+  }
+  function patchPctSlider() {
+    if (!CURRENT_USER) return;
+    var m = /^#\/projects\/[^/]+\/([^/?#]+)/.exec(location.hash);
+    var code = m ? decodeURIComponent(m[1]) : null;
+    if (!code) return;
+    var label = qltkmFindPctSliderLabel();
+    if (!label) return;
+    var input = label.querySelector('input[type="range"]');
+    if (!input || input.__qltkmPctCode === code) return;
+    input.__qltkmPctCode = code; // tranh goi API lap lai cho cung 1 lan render
+    qltkmCheckBreakdown(code, function (has) {
+      // tim lai phan tu: React co the da render lai trong luc cho ket qua fetch
+      var label2 = qltkmFindPctSliderLabel();
+      var input2 = label2 && label2.querySelector('input[type="range"]');
+      if (!input2) return;
+      if (has) {
+        input2.disabled = true;
+        input2.style.opacity = "0.5";
+        input2.style.cursor = "not-allowed";
+        if (label2.querySelector("[data-qltkm-pct-note]")) return;
+        var note = document.createElement("div");
+        note.setAttribute("data-qltkm-pct-note", "1");
+        note.textContent = 'Dự án này có "Tiến độ chi tiết" — sửa % tại đó, ô này không có tác dụng khi lưu.';
+        note.style.fontSize = "11px";
+        note.style.color = "#b45309";
+        note.style.marginTop = "2px";
+        label2.appendChild(note);
+      }
+    });
   }
 
   var mo = new MutationObserver(function (mutations) {
