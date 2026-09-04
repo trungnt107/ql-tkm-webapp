@@ -10,6 +10,7 @@ const fs = require("fs");
 const { db } = require("./db.js");
 const {
   ROLE_LABELS,
+  PERMISSION_LABELS,
   findUserByUsername,
   findUserById,
   createSession,
@@ -19,18 +20,60 @@ const {
   requireAuth,
   requireRole,
   canEditProject,
+  getProjectPermission,
+  canViewProject,
+  canUpdateProject,
+  canManageProjectFull,
+  canDeleteProjectAcl,
+  visibleProjectCodesFor,
   bcrypt,
 } = require("./auth.js");
 
 const PORT = process.env.PORT || 3000;
+// Railway (va cac host tuong tu) chay ung dung sau 1 lop reverse proxy dam
+// nhiem TLS: nhan dien qua bien moi truong RAILWAY_ENVIRONMENT do Railway tu
+// cap, hoac NODE_ENV=production duoc cau hinh thu cong.
+const IS_PROD = !!(process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production");
 const PUBLIC_HTML = path.join(__dirname, "public_index.html");
 const ADMIN_HTML = path.join(__dirname, "admin-users.html");
 const SEED_META = JSON.parse(fs.readFileSync(path.join(__dirname, "data", "seed_data.json"), "utf8"));
 
 const app = express();
+if (IS_PROD) app.set("trust proxy", 1);
 app.use(express.json({ limit: "20mb" }));
 app.use(cookieParser());
 app.use(attachUser);
+
+// ---------------------------------------------------------------------------
+// Chong do vet mat khau: gioi han so lan dang nhap sai theo tung
+// username+IP (bo nho tam trong tien trinh - du dung cho 1 instance Railway).
+// ---------------------------------------------------------------------------
+const LOGIN_MAX_ATTEMPTS = 8;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const loginAttempts = new Map(); // key -> { count, firstAt }
+function loginRateKey(req, username) {
+  return (req.ip || "unknown") + "|" + String(username || "").toLowerCase();
+}
+function isLoginRateLimited(key) {
+  const rec = loginAttempts.get(key);
+  if (!rec) return false;
+  if (Date.now() - rec.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return false;
+  }
+  return rec.count >= LOGIN_MAX_ATTEMPTS;
+}
+function registerLoginFailure(key) {
+  const rec = loginAttempts.get(key);
+  if (!rec || Date.now() - rec.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAt: Date.now() });
+  } else {
+    rec.count += 1;
+  }
+}
+function clearLoginFailures(key) {
+  loginAttempts.delete(key);
+}
 
 function now() {
   return new Date().toISOString();
@@ -66,15 +109,25 @@ app.get("/api/events", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body || {};
+  const rateKey = loginRateKey(req, username);
+  if (isLoginRateLimited(rateKey)) {
+    return err(res, 429, "Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau ít phút.");
+  }
   const u = findUserByUsername(String(username || "").trim());
-  if (!u || !u.active) return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
-  if (!bcrypt.compareSync(String(password || ""), u.password_hash)) {
+  if (!u || !u.active) {
+    registerLoginFailure(rateKey);
     return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
   }
+  if (!bcrypt.compareSync(String(password || ""), u.password_hash)) {
+    registerLoginFailure(rateKey);
+    return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
+  }
+  clearLoginFailures(rateKey);
   const { token, expires } = createSession(u.id);
   res.cookie("sid", token, {
     httpOnly: true,
     sameSite: "lax",
+    secure: IS_PROD,
     expires,
   });
   res.json({ user: publicUser(u) });
@@ -141,8 +194,23 @@ app.get("/api/projects-list-for-assignment", requireRole("admin", "manager"), (r
   res.json({ projects: rows });
 });
 app.get("/api/auth/my-assignments", requireAuth, (req, res) => {
-  const rows = db.prepare("SELECT project_code FROM project_members WHERE user_id = ?").all(req.user.id);
+  // Tuong thich nguoc: danh sach ma du an ma nguoi dung hien tai duoc SUA
+  // (tuc muc quyen UPDATE tro len trong bang phan quyen chi tiet moi).
+  const rows = db
+    .prepare("SELECT project_code FROM user_project_permissions WHERE user_id = ? AND permission_level != 'VIEW'")
+    .all(req.user.id);
   res.json({ project_codes: rows.map((r) => r.project_code) });
+});
+app.get("/api/auth/my-permissions", requireAuth, (req, res) => {
+  if (req.user.role === "admin" || req.user.role === "manager") {
+    return res.json({ full_access: true, permissions: {} });
+  }
+  const rows = db
+    .prepare("SELECT project_code, permission_level FROM user_project_permissions WHERE user_id = ?")
+    .all(req.user.id);
+  const permissions = {};
+  rows.forEach((r) => (permissions[r.project_code] = r.permission_level));
+  res.json({ full_access: false, permissions });
 });
 app.get("/api/members/:userId", requireRole("admin", "manager"), (req, res) => {
   const rows = db.prepare("SELECT project_code FROM project_members WHERE user_id = ?").all(Number(req.params.userId));
@@ -165,6 +233,75 @@ app.put("/api/members/:userId", requireRole("admin", "manager"), (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Phan quyen chi tiet theo TUNG DU AN (ACL: VIEW / UPDATE / MANAGE / FULL)
+// Chi admin duoc xem/sua - day la kenh chinh de gan quyen cho vai tro
+// 'responsible' va 'viewer'. (Xem auth.js: admin/manager luon FULL moi du an
+// nen khong can - va khong bi anh huong boi - bang nay.)
+// ---------------------------------------------------------------------------
+const VALID_PERMISSION_LEVELS = ["VIEW", "UPDATE", "MANAGE", "FULL"];
+app.get("/api/users/:userId/projects", requireRole("admin"), (req, res) => {
+  const userId = Number(req.params.userId);
+  const rows = db
+    .prepare(
+      `SELECT upp.project_code, upp.permission_level, p.name AS project_name, p.parent_code
+       FROM user_project_permissions upp
+       JOIN projects p ON p.code = upp.project_code
+       WHERE upp.user_id = ?
+       ORDER BY upp.project_code`
+    )
+    .all(userId);
+  res.json({
+    projects: rows.map((r) => ({
+      project_id: r.project_code,
+      project_code: r.project_code,
+      project_name: r.project_name,
+      parent_code: r.parent_code,
+      permission: r.permission_level,
+      permission_label: PERMISSION_LABELS[r.permission_level] || r.permission_level,
+    })),
+  });
+});
+app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
+  const userId = Number(req.params.userId);
+  const u = findUserById(userId);
+  if (!u) return err(res, 404, "Không tìm thấy người dùng.");
+  const rawList = Array.isArray(req.body)
+    ? req.body
+    : req.body && Array.isArray(req.body.permissions)
+    ? req.body.permissions
+    : null;
+  if (!rawList) return err(res, 400, 'Dữ liệu không hợp lệ - cần một mảng [{ "project_id": "...", "permission": "VIEW|UPDATE|MANAGE|FULL" }].');
+
+  const clean = [];
+  for (const item of rawList) {
+    const code = item && (item.project_id || item.project_code);
+    const level = String((item && (item.permission || item.permission_level)) || "").toUpperCase();
+    if (!code) continue;
+    if (!VALID_PERMISSION_LEVELS.includes(level)) {
+      return err(res, 400, `Mức quyền không hợp lệ cho dự án "${code}": "${item.permission}".`);
+    }
+    clean.push({ code, level });
+  }
+
+  const ts = now();
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM user_project_permissions WHERE user_id = ?").run(userId);
+    const ins = db.prepare(
+      `INSERT INTO user_project_permissions (user_id, project_code, permission_level, created_at, updated_at)
+       VALUES (?,?,?,?,?)
+       ON CONFLICT(user_id, project_code) DO UPDATE SET permission_level = excluded.permission_level, updated_at = excluded.updated_at`
+    );
+    clean.forEach((it) => ins.run(userId, it.code, it.level, ts, ts));
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    return err(res, 500, "Lưu phân quyền dự án thất bại: " + e.message);
+  }
+  res.json({ ok: true, count: clean.length });
+});
+
+// ---------------------------------------------------------------------------
 // Helpers: doc du lieu tinh (excel goc) va dung chung
 // ---------------------------------------------------------------------------
 function getCategories() {
@@ -176,8 +313,7 @@ function getCategories() {
   }
   return cats;
 }
-function taskRowsFor(code) {
-  return db
+function taskRowsFor(code) {  return db
     .prepare("SELECT * FROM project_tasks WHERE project_code = ? ORDER BY sort_order, id")
     .all(code)
     .map((t) => ({
@@ -223,8 +359,24 @@ function rowToAddedChild(row) {
   return rowToOverride(row); // cung shape voi override, du du de day thang vao addedChildren
 }
 
-function buildBootstrap() {
-  const projectRows = db.prepare("SELECT * FROM projects WHERE deleted_at IS NULL").all();
+function buildBootstrap(user) {
+  let projectRows = db.prepare("SELECT * FROM projects WHERE deleted_at IS NULL").all();
+
+  // Loc theo quyen: admin/manager thay tat ca (visibleCodes === null). Voi
+  // 'responsible'/'viewer', chi thay du an CHI TIET duoc cap quyen (VIEW tro
+  // len) - va du an TONG (cha) cua no de cay khong bi "mo coi" tren giao dien
+  // (khong lo them cac du an chi tiet anh em khac chua duoc cap quyen).
+  const visibleCodes = visibleProjectCodesFor(user);
+  if (visibleCodes !== null) {
+    const visibleSet = new Set(visibleCodes);
+    const parentCodesNeeded = new Set();
+    projectRows.forEach((r) => {
+      if (r.parent_code && visibleSet.has(r.code)) parentCodesNeeded.add(r.parent_code);
+    });
+    projectRows = projectRows.filter((r) => visibleSet.has(r.code) || (!r.parent_code && parentCodesNeeded.has(r.code)));
+  }
+  const visibleFinalSet = new Set(projectRows.map((r) => r.code));
+
   const byCode = {};
   projectRows.forEach((r) => (byCode[r.code] = r));
 
@@ -263,6 +415,7 @@ function buildBootstrap() {
        WHERE p.deleted_at IS NULL ORDER BY i.id`
     )
     .all()
+    .filter((i) => visibleFinalSet.has(i.project_code))
     .map((i) => ({
       issue_id: "ISS-USR-" + i.id,
       parent_code: i.p_parent_code,
@@ -286,6 +439,7 @@ function buildBootstrap() {
        WHERE p.deleted_at IS NULL ORDER BY m.id`
     )
     .all()
+    .filter((m) => visibleFinalSet.has(m.project_code))
     .map((m) => ({
       child_code: m.project_code,
       material_name: m.material_name,
@@ -397,7 +551,7 @@ function nextChildCode(parentCode, category) {
 // API du lieu chinh
 // ---------------------------------------------------------------------------
 app.get("/api/bootstrap", requireAuth, (req, res) => {
-  res.json(buildBootstrap());
+  res.json(buildBootstrap(req.user));
 });
 
 app.get("/api/next-code", requireAuth, (req, res) => {
@@ -460,12 +614,17 @@ function payloadToFields(payload) {
     cancel_flag: payload.status === "Không thực hiện/Hủy DA" ? "Có" : "Không",
   };
 }
+// Ep ve mang [] neu client gui sai kieu (vd chuoi/so/null) - tranh 500 loi
+// "X.forEach is not a function" khi payload khong dung dang mong doi.
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}
 function replaceTasks(code, tasks) {
   db.prepare("DELETE FROM project_tasks WHERE project_code = ?").run(code);
   const ins = db.prepare(
     "INSERT INTO project_tasks (project_code, task_name, responsible_person, start_date, due_date, pct_done, status, note, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
   );
-  (tasks || []).forEach((t, idx) => {
+  asArray(tasks).forEach((t, idx) => {
     ins.run(code, t.task_name || "", t.responsible_person || null, t.start_date || null, t.due_date || null, t.pct_done ?? 0, t.status || "Chưa thực hiện", t.note || null, idx, now(), now());
   });
 }
@@ -474,7 +633,7 @@ function replaceIssues(code, issues, userName) {
   const ins = db.prepare(
     "INSERT INTO project_issues (project_code, content, cause, severity, responsible_unit, responsible_person, due_date, status, note, source, created_at, updated_at, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
   );
-  (issues || []).forEach((it) => {
+  asArray(issues).forEach((it) => {
     ins.run(
       code, it.content || "", it.cause || null, it.severity || "Trung bình",
       it.coordination_unit || null, it.responsible_person || null, it.due_date || null,
@@ -487,12 +646,11 @@ function replaceMaterials(code, materials, userName) {
   const ins = db.prepare(
     "INSERT INTO project_materials (project_code, material_code, material_name, unit, planned_qty, received_qty, used_qty, note, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?)"
   );
-  (materials || []).forEach((mt) => {
+  asArray(materials).forEach((mt) => {
     ins.run(
       code, mt.material_code || null, mt.material_name || "", mt.unit || null,
       mt.planned_qty === "" || mt.planned_qty == null ? null : Number(mt.planned_qty),
-      mt.received_qty === "" || mt.received_qty == null ? null : Number(mt.received_qty),
-      mt.used_qty === "" || mt.used_qty == null ? null : Number(mt.used_qty),
+      mt.received_qty === "" || mt.received_qty == null ? null : Number(mt.received_qty),      mt.used_qty === "" || mt.used_qty == null ? null : Number(mt.used_qty),
       mt.note || null, now(), userName
     );
   });
@@ -547,44 +705,85 @@ app.post("/api/projects", requireRole("admin", "manager"), (req, res) => {
   }
 });
 
-app.put("/api/projects/:code", requireAuth, (req, res) => {
-  const code = decodeURIComponent(req.params.code);
-  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
-  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
-  if (!canEditProject(req.user, code)) return err(res, 403, "Bạn không có quyền sửa dự án này.");
+// Cac truong "quan trong" cua du an - chi sua duoc khi la admin/manager hoac
+// duoc cap quyen MANAGE/FULL tren du an do. Muc UPDATE chi duoc dong vao tien
+// do/trang thai/cac truong con lai (xem applyPermissionTierToFields).
+const PROJECT_CORE_FIELDS = [
+  "name", "category", "region", "design_type", "contractor", "exec_year",
+  "responsible_unit", "responsible_person", "priority_level",
+  "planned_km_or_station", "budget_value", "contract_value", "settlement_value",
+  "planned_start_date", "planned_end_date",
+];
+// Neu nguoi sua chi co quyen UPDATE (khong phai admin/manager/MANAGE/FULL):
+// giu nguyen cac truong "quan trong" nhu du lieu cu, chi cho phep di qua cac
+// thay doi ve tien do/trang thai/ngay thuc te - dung nhu dac ta "Cap nhat
+// tien do" (khong duoc doi thong tin quan trong cua du an).
+function applyPermissionTierToFields(f, row, tier) {
+  if (tier === "UPDATE") {
+    const restricted = Object.assign({}, f);
+    PROJECT_CORE_FIELDS.forEach((field) => {
+      restricted[field] = row[field];
+    });
+    return restricted;
+  }
+  return f; // admin/manager/MANAGE/FULL: toan quyen cac truong
+}
 
-  const payload = req.body || {};
-  const clientVersion = payload.__version;
-  if (clientVersion != null && Number(clientVersion) !== row.version) {
-    return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+app.put("/api/projects/:code", requireAuth, (req, res) => {
+  try {
+    const code = decodeURIComponent(req.params.code);
+    const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+    if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+
+    const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+    const level = isFullRole ? "FULL" : getProjectPermission(req.user, code);
+    if (!level || level === "VIEW") {
+      return err(res, 403, "Bạn không có quyền sửa dự án này.");
+    }
+    // Tuong duong "tier" dung de quyet dinh pham vi duoc sua: UPDATE = chi
+    // tien do/trang thai/vuong mac; MANAGE/FULL (hoac admin/manager) = toan
+    // quyen sua thong tin + cong viec + vat tu cua du an nay.
+    const tier = level === "UPDATE" ? "UPDATE" : "MANAGE";
+
+    const payload = req.body || {};
+    const clientVersion = payload.__version;
+    if (clientVersion != null && Number(clientVersion) !== row.version) {
+      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+    }
+    const f = applyPermissionTierToFields(payloadToFields(payload), row, tier);
+    const info = db
+      .prepare(
+        `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
+          responsible_unit=?, responsible_person=?, priority_level=?, status=?, planned_km_or_station=?,
+          budget_value=?, contract_value=?, settlement_value=?, planned_start_date=?, planned_end_date=?,
+          actual_start_date=?, actual_end_date=?, volume_done=?, progress=?, cancel_flag=?,
+          version=version+1, updated_at=?, updated_by=?
+         WHERE code=? AND version=?`
+      )
+      .run(
+        f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
+        f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station,
+        f.budget_value, f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date,
+        f.actual_start_date, f.actual_end_date, f.volume_done, f.progress, f.cancel_flag,
+        now(), req.user.display_name, code, row.version
+      );
+    if (info.changes === 0) {
+      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+    }
+    // Muc UPDATE: khong duoc dong vao danh sach cong viec / vat tu, chi duoc
+    // cap nhat "vuong mac" (issues) nhu dac ta.
+    if (tier !== "UPDATE") {
+      replaceTasks(code, payload.tasks);
+      replaceMaterials(code, payload.materials, req.user.display_name);
+    }
+    replaceIssues(code, payload.issues, req.user.display_name);
+    logHistory(code, req.user.display_name, "update", row, f);
+    const newRow = db.prepare("SELECT version FROM projects WHERE code = ?").get(code);
+    broadcastChange({ code, action: "update", by: req.user.display_name });
+    res.json({ ok: true, child_code: code, version: newRow.version });
+  } catch (e) {
+    err(res, 500, "Cập nhật dự án thất bại: " + (IS_PROD ? "Đã có lỗi ở máy chủ." : e.message));
   }
-  const f = payloadToFields(payload);
-  const info = db
-    .prepare(
-      `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
-        responsible_unit=?, responsible_person=?, priority_level=?, status=?, planned_km_or_station=?,
-        budget_value=?, contract_value=?, settlement_value=?, planned_start_date=?, planned_end_date=?,
-        actual_start_date=?, actual_end_date=?, volume_done=?, progress=?, cancel_flag=?,
-        version=version+1, updated_at=?, updated_by=?
-       WHERE code=? AND version=?`
-    )
-    .run(
-      f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
-      f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station,
-      f.budget_value, f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date,
-      f.actual_start_date, f.actual_end_date, f.volume_done, f.progress, f.cancel_flag,
-      now(), req.user.display_name, code, row.version
-    );
-  if (info.changes === 0) {
-    return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
-  }
-  replaceTasks(code, payload.tasks);
-  replaceIssues(code, payload.issues, req.user.display_name);
-  replaceMaterials(code, payload.materials, req.user.display_name);
-  logHistory(code, req.user.display_name, "update", row, f);
-  const newRow = db.prepare("SELECT version FROM projects WHERE code = ?").get(code);
-  broadcastChange({ code, action: "update", by: req.user.display_name });
-  res.json({ ok: true, child_code: code, version: newRow.version });
 });
 
 app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res) => {
@@ -638,8 +837,12 @@ app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res
   }
 });
 
-app.delete("/api/projects/:code", requireRole("admin", "manager"), (req, res) => {
+app.delete("/api/projects/:code", requireAuth, (req, res) => {
   const code = decodeURIComponent(req.params.code);
+  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+  if (!isFullRole && !canDeleteProjectAcl(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xóa dự án này.");
+  }
   const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
   if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
   if (!row.parent_code) {
@@ -656,6 +859,10 @@ app.delete("/api/projects/:code", requireRole("admin", "manager"), (req, res) =>
 
 app.get("/api/projects/:code/history", requireAuth, (req, res) => {
   const code = decodeURIComponent(req.params.code);
+  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+  if (!isFullRole && !canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem lịch sử dự án này.");
+  }
   const rows = db
     .prepare("SELECT * FROM project_history WHERE project_code = ? ORDER BY id DESC LIMIT 200")
     .all(code);
@@ -669,7 +876,7 @@ app.post("/api/import/commit", requireAuth, (req, res) => {
   err(res, 501, "Chức năng Nhập từ Excel chưa được hỗ trợ ở bản này.");
 });
 app.get("/api/export", requireAuth, (req, res) => {
-  res.json(buildBootstrap());
+  res.json(buildBootstrap(req.user));
 });
 
 // ---------------------------------------------------------------------------
@@ -680,6 +887,24 @@ app.get("/admin-users.html", requireRole("admin"), (req, res) => {
 });
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(PUBLIC_HTML);
+});
+
+// API khong khop route nao o tren -> tra JSON 404 (thay vi trang HTML 404
+// mac dinh cua Express, de fetch() phia client luon parse duoc .json()).
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "Không tìm thấy API." });
+});
+
+// Loi bat bat ngo (unhandled) o bat ky route nao o tren: tra ve JSON gon
+// gang thay vi trang loi HTML mac dinh cua Express (rat de lo ca duong dan
+// file server that len nguoi dung/console trinh duyet o che do khong phai
+// production). Log day du ra console server de con debug.
+app.use((errObj, req, res, next) => {
+  console.error("Unhandled error:", errObj);
+  if (res.headersSent) return next(errObj);
+  res.status(500).json({
+    error: IS_PROD ? "Đã có lỗi xảy ra ở máy chủ." : String((errObj && errObj.message) || errObj),
+  });
 });
 
 app.listen(PORT, () => {
