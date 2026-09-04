@@ -158,10 +158,16 @@ function fmtDate(s){
 }
 function dateInputVal(s){ return s || ""; }
 
-function fillPicker(childItems, parentItems) {
+// items: [{code, name, parent_code, parent_name}] - danh sach du an CHI TIET
+// (da loc theo quyen). Nhom lai theo tung du an TONG (parent_code) de nguoi
+// dung de tim, va danh dau ro rang du an TONG (optgroup + dong "Xem tong
+// hop") de phan biet voi cac du an chi tiet con nam ben trong.
+// allowParentSelect: co hien dong "Xem tong hop" cho phep chon thang du an
+// TONG hay khong (chi admin/manager, giu nguyen logic cu).
+function fillPicker(items, allowParentSelect) {
   var sel = document.getElementById("projectPicker");
   sel.innerHTML = "";
-  if (!childItems.length && !parentItems.length) {
+  if (!items.length) {
     sel.innerHTML = "<option value=''>(Không có dự án nào bạn có thể xem/sửa)</option>";
     return;
   }
@@ -169,26 +175,31 @@ function fillPicker(childItems, parentItems) {
   placeholder.value = ""; placeholder.textContent = "— Chọn dự án —";
   sel.appendChild(placeholder);
 
-  if (parentItems && parentItems.length) {
-    var og1 = document.createElement("optgroup");
-    og1.label = "Dự án TỔNG (xem thời gian hoàn thành gộp)";
-    parentItems.sort(function(a,b){ return a.code.localeCompare(b.code); }).forEach(function(p){
-      var opt = document.createElement("option");
-      opt.value = p.code; opt.dataset.kind = "parent";
-      opt.textContent = p.code + " — " + p.name;
-      og1.appendChild(opt);
-    });
-    sel.appendChild(og1);
-  }
-  var og2 = document.createElement("optgroup");
-  og2.label = "Dự án chi tiết (sửa từng công việc)";
-  childItems.sort(function(a,b){ return a.code.localeCompare(b.code); }).forEach(function(p){
-    var opt = document.createElement("option");
-    opt.value = p.code; opt.dataset.kind = "child";
-    opt.textContent = p.code + " — " + p.name;
-    og2.appendChild(opt);
+  var byParent = {};
+  items.forEach(function(it){
+    var pc = it.parent_code || "(?)";
+    if (!byParent[pc]) byParent[pc] = { parent_name: it.parent_name || pc, children: [] };
+    byParent[pc].children.push(it);
   });
-  sel.appendChild(og2);
+  Object.keys(byParent).sort().forEach(function(pc){
+    var group = byParent[pc];
+    var og = document.createElement("optgroup");
+    og.label = "📁 DỰ ÁN TỔNG " + pc + " — " + group.parent_name;
+    if (allowParentSelect) {
+      var parentOpt = document.createElement("option");
+      parentOpt.value = pc; parentOpt.dataset.kind = "parent";
+      parentOpt.textContent = "📊 Xem thời gian hoàn thành gộp của cả " + pc;
+      og.appendChild(parentOpt);
+    }
+    group.children.sort(function(a,b){ return a.code.localeCompare(b.code); }).forEach(function(c){
+      var opt = document.createElement("option");
+      opt.value = c.code; opt.dataset.kind = "child";
+      // thut le bang khoang trang de phan biet voi dong dau nhom (du an TONG)
+      opt.textContent = "    " + c.code + " — " + c.name;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
 
   var qsCode = new URLSearchParams(location.search).get("code");
   if (qsCode) {
@@ -206,9 +217,12 @@ function loadProjectList(user) {
   if (user.role === "admin" || user.role === "manager") {
     api("/api/projects-list-for-assignment").then(function(d){
       var all = d.projects || [];
-      var children = all.filter(function(p){ return p.parent_code; }).map(function(p){ return {code: p.code, name: p.name}; });
-      var parents = all.filter(function(p){ return !p.parent_code; }).map(function(p){ return {code: p.code, name: p.name}; });
-      fillPicker(children, parents);
+      var parentNameByCode = {};
+      all.forEach(function(p){ if (!p.parent_code) parentNameByCode[p.code] = p.name; });
+      var items = all.filter(function(p){ return p.parent_code; }).map(function(p){
+        return { code: p.code, name: p.name, parent_code: p.parent_code, parent_name: parentNameByCode[p.parent_code] || p.parent_code };
+      });
+      fillPicker(items, true);
     }).catch(function(e){ msg.className="msg err"; msg.textContent = e.message; });
     return;
   }
@@ -223,18 +237,36 @@ function loadProjectList(user) {
         if (lvl === "UPDATE" || lvl === "MANAGE" || lvl === "FULL") editable[c] = true;
       });
     }
+    var parentNameByCode = {};
+    (boot.parents||[]).forEach(function(p){ parentNameByCode[p.parent_code] = p.parent_name; });
+    (boot.addedParents||[]).forEach(function(p){ parentNameByCode[p.parent_code] = p.parent_name; });
     var items = [];
     (boot.children||[]).forEach(function(c){
       var code = c.detail && c.detail.header ? c.detail.header.child_code : null;
-      if (code && editable[code]) items.push({code: code, name: (c.detail.header.child_name || code)});
+      if (code && editable[code]) {
+        var pc = c.parent_code || (c.detail.header && c.detail.header.parent_code) || null;
+        items.push({
+          code: code,
+          name: (c.detail.header.child_name || code),
+          parent_code: pc,
+          parent_name: c.parent_name || (c.detail.header && c.detail.header.parent_name) || parentNameByCode[pc] || pc,
+        });
+      }
     });
     (boot.addedChildren||[]).forEach(function(c){
-      if (c.child_code && editable[c.child_code]) items.push({code: c.child_code, name: c.child_name || c.child_code});
+      if (c.child_code && editable[c.child_code]) {
+        items.push({
+          code: c.child_code,
+          name: c.child_name || c.child_code,
+          parent_code: c.parent_code || null,
+          parent_name: parentNameByCode[c.parent_code] || c.parent_code,
+        });
+      }
     });
     if (!items.length) {
       msg.className = "msg"; msg.textContent = "Bạn chưa được cấp quyền \"Cập nhật tiến độ\" trở lên trên dự án nào — liên hệ quản trị viên để được phân quyền (mục ⚙ Người dùng).";
     }
-    fillPicker(items, []); // du an TONG chi hien voi admin/manager (xem gop toan bo)
+    fillPicker(items, false); // du an TONG chi cho chon xem gop voi admin/manager
   }).catch(function(e){ msg.className="msg err"; msg.textContent = e.message; });
 }
 
