@@ -1,0 +1,1059 @@
+diff --git a/README.md b/README.md
+index 6c0b86d..a565e0e 100644
+--- a/README.md
++++ b/README.md
+@@ -83,13 +83,54 @@ bằng cách sửa giao diện trình duyệt):
+ |---|---|
+ | **Quản trị viên (admin)** | Toàn quyền: thêm/sửa/xóa mọi dự án, quản lý tài khoản, phân quyền |
+ | **Quản lý (manager)** | Xem tất cả, tạo mới, chỉnh sửa mọi dự án, cập nhật trạng thái/tiến độ |
+-| **Người phụ trách (responsible)** | Chỉ **chỉnh sửa** được các dự án chi tiết đã được admin "Phân công" cho mình (tiến độ, công việc, vướng mắc, vật tư); vẫn **xem được** toàn bộ dữ liệu như những người khác |
+-| **Người xem (viewer)** | Chỉ xem, không có bất kỳ nút chỉnh sửa/thêm/xóa nào hoạt động |
++| **Người phụ trách (responsible)** | Chỉ thấy/thao tác trên các dự án chi tiết được admin cấp quyền — xem mục 7.1 |
++| **Người xem (viewer)** | Chỉ thấy/xem các dự án chi tiết được admin cấp quyền — xem mục 7.1 |
+ 
+ Giao diện sẽ tự ẩn/khóa các nút mà vai trò hiện tại không được phép bấm, để
+ gọn gàng — nhưng đây chỉ là lớp "cho đẹp". Lớp bảo mật thật sự nằm ở server:
+-mọi request thêm/sửa/xóa đều được server kiểm tra lại quyền trước khi ghi vào
+-database, dù request đó có đến từ đâu.
++mọi request xem/thêm/sửa/xóa đều được server kiểm tra lại quyền trước khi trả
++dữ liệu hoặc ghi vào database, dù request đó có đến từ đâu (kể cả gọi thẳng
++API, bỏ qua giao diện).
++
++### 7.1. Phân quyền chi tiết theo TỪNG DỰ ÁN (dành cho "Người phụ trách"/"Người xem")
++
++Ngoài 4 vai trò ở trên, admin có thể cấp quyền **riêng cho từng người, trên
++từng dự án chi tiết cụ thể** — vào **"⚙ Người dùng" → nút "🔑 Phân quyền dự
++án"** cạnh tên người đó (chỉ hiện với vai trò Người phụ trách/Người xem, vì
++admin/manager vẫn luôn toàn quyền mọi dự án như trước).
++
++4 mức quyền trên một dự án, từ thấp đến cao:
++
++| Mức quyền | Được làm gì trên dự án đó |
++|---|---|
++| **Chỉ xem (VIEW)** | Xem thông tin, tiến độ, công việc, vướng mắc. Không sửa được gì. |
++| **Cập nhật tiến độ (UPDATE)** | Xem + sửa trạng thái/tiến độ/vướng mắc. Không được đổi tên/loại/nhà thầu... (thông tin quan trọng), không được thêm/sửa/xóa danh sách công việc, không được đụng vào vật tư. |
++| **Quản lý dự án (MANAGE)** | Toàn quyền thao tác bên trong dự án đó: sửa thông tin, quản lý công việc, quản lý vật tư, cập nhật tiến độ. Không xóa được dự án. |
++| **Toàn quyền dự án (FULL)** | Như Quản lý dự án, cộng thêm được xóa dự án chi tiết đó. |
++
++Quan trọng: **dự án nào không được cấp quyền thì người đó hoàn toàn không
++nhìn thấy** — không phải chỉ ẩn nút trên giao diện, mà API `/api/bootstrap`
++ở server đã lọc sẵn, không trả dữ liệu dự án đó về cho trình duyệt. Gọi thẳng
++API (`GET/PUT/DELETE /api/projects/:code`) vào một dự án chưa được cấp quyền
++cũng bị server chặn với lỗi 403, dù có sửa giao diện hay không.
++
++Vì mỗi dự án tổng đọc thấy được là do có ít nhất 1 dự án chi tiết bên trong
++được cấp quyền, dự án tổng cha sẽ tự động hiện ra để giữ đúng cây phân cấp,
++nhưng các dự án chi tiết *khác* cùng dự án tổng đó (chưa được cấp quyền) vẫn
++bị ẩn — đúng như mong muốn.
++
++Nếu một tài khoản "Người phụ trách"/"Người xem" đã từng được "Phân công dự
++án" theo cách cũ (trước khi có tính năng này) thì khi nâng cấp, hệ thống tự
++động chuyển các phân công cũ đó thành mức quyền **Cập nhật tiến độ (UPDATE)**
++tương đương, để không ai bị mất quyền đang dùng.
++
++**Giới hạn hiện tại** (có thể làm thêm nếu cần): mức "Cập nhật tiến độ" chưa
++giới hạn tới *từng công việc cụ thể* trong dự án (ví dụ: chỉ cho sửa đúng
++công việc được giao tên mình) — vì giao diện danh sách công việc nằm trong
++phần React đã đóng gói sẵn (file `public_index.html`), khó chỉnh sâu mà
++không rủi ro ảnh hưởng các phần khác đang chạy tốt; hiện tại mức này tạm thời
++không cho sửa công việc nào cả (chỉ sửa tiến độ/trạng thái/vướng mắc của cả
++dự án) để tránh trường hợp mất dữ liệu công việc của người khác khi lưu.
+ 
+ ## 8. Dữ liệu được lưu ở đâu
+ 
+@@ -167,16 +208,24 @@ Bản đặc tả bạn gửi rất đầy đủ và chi tiết (25 mục). Ph
+ dựng đúng như yêu cầu. Một vài điểm được đơn giản hoá có chủ đích, xin nêu rõ
+ thay vì để bạn tự phát hiện sau:
+ 
+-- **Vai trò/quyền hạn** hiện là 4 vai trò cố định trong code (admin / manager
+-  / responsible / viewer), chưa phải là một hệ thống phân quyền động (tạo
+-  thêm vai trò mới, tuỳ chỉnh từng quyền riêng lẻ) như mô tả ở phần thiết kế
+-  bảng dữ liệu trong yêu cầu gốc. Với quy mô một phòng/ban thì 4 vai trò này
+-  thường là đủ dùng; nếu sau này cần vai trò tuỳ biến sâu hơn, đây sẽ là điểm
+-  cần phát triển thêm.
+-- **"Người phụ trách" xem được toàn bộ dữ liệu**, chỉ bị giới hạn ở quyền
+-  **chỉnh sửa** (chỉ sửa được các dự án đã được phân công). Việc giới hạn cả
+-  quyền *xem* theo từng người sẽ cần chỉnh sâu vào giao diện gốc (vốn là mã
+-  đã đóng gói/thu gọn, khó tách nhỏ theo từng phần dữ liệu) nên hiện chưa làm.
++- **Vai trò/quyền hạn**: admin/manager vẫn là 2 vai trò toàn quyền cố định
++  trong code. Riêng "Người phụ trách"/"Người xem" thì **từ bản nâng cấp
++  phân quyền theo dự án, không còn cố định nữa** — xem mục 7.1: admin cấp
++  1-trong-4 mức quyền (Chỉ xem/Cập nhật tiến độ/Quản lý dự án/Toàn quyền) cho
++  từng người trên từng dự án chi tiết cụ thể, lưu trong database (bảng
++  `user_project_permissions`), không phải hard-code.
++- ~~"Người phụ trách" xem được toàn bộ dữ liệu~~ — **đã khắc phục**: dự án
++  chưa được cấp quyền (dù là VIEW) giờ **không hiển thị** với người đó nữa,
++  được lọc ngay ở API `/api/bootstrap` phía server (xem mục 7.1), không chỉ
++  ẩn bằng giao diện.
++- **Phân quyền tới từng công việc (task) cụ thể trong 1 dự án** (ví dụ: chỉ
++  cho sửa đúng công việc được giao tên mình) **chưa làm** ở bản này — vì cần
++  chỉnh sâu vào phần danh sách công việc trong giao diện gốc (`public_index.html`,
++  vốn là mã React đã đóng gói/thu gọn sẵn từ trước), rủi ro ảnh hưởng các
++  phần khác đang chạy tốt nếu làm vội. Mức quyền "Cập nhật tiến độ" hiện tạm
++  thời không được sửa danh sách công việc (chỉ sửa tiến độ/trạng thái/vướng
++  mắc của cả dự án) để tránh mất dữ liệu công việc của người khác khi lưu —
++  xem chi tiết ở mục 7.1.
+ - **Cập nhật gần thời gian thực** dùng Server-Sent Events (một trong các lựa
+   chọn bạn cho phép) — khi ai đó lưu thay đổi, người khác đang mở trang sẽ
+   thấy ngay một thông báo nhỏ "🔄 ... vừa cập nhật dữ liệu" kèm nút "Tải lại".
+diff --git a/admin-users.html b/admin-users.html
+index 51bed36..87b977e 100644
+--- a/admin-users.html
++++ b/admin-users.html
+@@ -28,6 +28,14 @@
+   .chips{display:flex;flex-wrap:wrap;gap:6px;max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px}
+   .chip{font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer;user-select:none}
+   .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
++  .permlist{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px}
++  .permrow{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}
++  .permrow:last-child{border-bottom:none}
++  .permrow .pname{flex:1;min-width:0}
++  .permrow .pname b{font-size:12.5px}
++  .permrow .pname span{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
++  .permrow select{width:170px;flex:none}
++  .permrow input[type=checkbox]{width:16px;height:16px;flex:none}
+ </style>
+ </head>
+ <body>
+@@ -64,11 +72,15 @@
+   </div>
+ 
+   <div class="panel" id="assignPanel" style="display:none">
+-    <h2>Phân công dự án cho: <span id="assignUserName"></span></h2>
+-    <p class="muted">Chỉ áp dụng với vai trò "Người phụ trách" — họ chỉ sửa được các dự án chi tiết được tick chọn dưới đây.</p>
+-    <div class="chips" id="assignChips"></div>
++    <h2>Phân quyền dự án cho: <span id="assignUserName"></span></h2>
++    <p class="muted">
++      Chỉ áp dụng với vai trò "Người phụ trách"/"Người xem". Tick chọn dự án
++      người này được tham gia, rồi chọn mức quyền cho từng dự án. Dự án không
++      được tick sẽ <b>không hiển thị</b> với người này khi họ đăng nhập.
++    </p>
++    <div class="permlist" id="assignChips"></div>
+     <div style="margin-top:12px;display:flex;gap:8px">
+-      <button class="primary" id="btnSaveAssign">Lưu phân công</button>
++      <button class="primary" id="btnSaveAssign">Lưu phân quyền</button>
+       <button id="btnCancelAssign">Đóng</button>
+     </div>
+     <div class="msg" id="assignMsg"></div>
+@@ -99,9 +111,9 @@ function loadUsers() {
+         "<td></td>";
+       var tdActions = tr.lastElementChild;
+ 
+-      if (u.role === "responsible") {
++      if (u.role === "responsible" || u.role === "viewer") {
+         var assignBtn = document.createElement("button");
+-        assignBtn.textContent = "Phân công dự án";
++        assignBtn.textContent = "🔑 Phân quyền dự án";
+         assignBtn.onclick = function(){ openAssign(u); };
+         tdActions.appendChild(assignBtn);
+       }
+@@ -150,6 +162,14 @@ document.getElementById("btnCreate").addEventListener("click", function(){
+     .catch(function(e){ msg.className = "msg err"; msg.textContent = e.message; });
+ });
+ 
++var PERM_OPTIONS = [
++  {value:"", label:"Không có quyền"},
++  {value:"VIEW", label:"Chỉ xem"},
++  {value:"UPDATE", label:"Cập nhật tiến độ"},
++  {value:"MANAGE", label:"Quản lý dự án"},
++  {value:"FULL", label:"Toàn quyền dự án"},
++];
++
+ function openAssign(user) {
+   document.getElementById("assignPanel").style.display = "block";
+   document.getElementById("assignUserName").textContent = user.display_name + " (" + user.username + ")";
+@@ -157,25 +177,53 @@ function openAssign(user) {
+   chipsEl.innerHTML = "Đang tải...";
+   Promise.all([
+     allProjects.length ? Promise.resolve({projects: allProjects}) : api("/api/projects-list-for-assignment"),
+-    api("/api/members/" + user.id),
++    api("/api/users/" + user.id + "/projects"),
+   ]).then(function(res){
+     allProjects = res[0].projects;
+-    var assigned = res[1].project_codes;
++    var assignedMap = {};
++    (res[1].projects || []).forEach(function(p){ assignedMap[p.project_code] = p.permission; });
+     chipsEl.innerHTML = "";
+     allProjects.filter(function(p){ return p.parent_code; }).forEach(function(p){
+-      var chip = document.createElement("div");
+-      chip.className = "chip" + (assigned.indexOf(p.code) !== -1 ? " on" : "");
+-      chip.textContent = p.code + " — " + p.name;
+-      chip.dataset.code = p.code;
+-      chip.onclick = function(){ chip.classList.toggle("on"); };
+-      chipsEl.appendChild(chip);
++      var current = assignedMap[p.code] || "";
++      var row = document.createElement("div");
++      row.className = "permrow";
++      row.dataset.code = p.code;
++
++      var cb = document.createElement("input");
++      cb.type = "checkbox";
++      cb.checked = !!current;
++
++      var nameWrap = document.createElement("div");
++      nameWrap.className = "pname";
++      nameWrap.innerHTML = "<b>" + p.code + "</b><span>" + p.name + "</span>";
++
++      var sel = document.createElement("select");
++      PERM_OPTIONS.filter(function(o){ return o.value; }).forEach(function(o){
++        var opt = document.createElement("option");
++        opt.value = o.value; opt.textContent = o.label;
++        if (o.value === (current || "VIEW")) opt.selected = true;
++        sel.appendChild(opt);
++      });
++      sel.disabled = !cb.checked;
++
++      cb.onchange = function(){ sel.disabled = !cb.checked; };
++
++      row.appendChild(cb);
++      row.appendChild(nameWrap);
++      row.appendChild(sel);
++      chipsEl.appendChild(row);
+     });
+     document.getElementById("btnSaveAssign").onclick = function(){
+-      var codes = Array.prototype.slice.call(chipsEl.querySelectorAll(".chip.on")).map(function(c){ return c.dataset.code; });
+-      api("/api/members/" + user.id, {method:"PUT", body: JSON.stringify({project_codes: codes})})
++      var rows = Array.prototype.slice.call(chipsEl.querySelectorAll(".permrow"));
++      var permissions = rows
++        .filter(function(r){ return r.querySelector("input[type=checkbox]").checked; })
++        .map(function(r){
++          return { project_id: r.dataset.code, permission: r.querySelector("select").value };
++        });
++      api("/api/users/" + user.id + "/project-permissions", {method:"PUT", body: JSON.stringify({permissions: permissions})})
+         .then(function(){
+           document.getElementById("assignMsg").className = "msg ok";
+-          document.getElementById("assignMsg").textContent = "Đã lưu phân công.";
++          document.getElementById("assignMsg").textContent = "Đã lưu phân quyền.";
+         })
+         .catch(function(e){
+           document.getElementById("assignMsg").className = "msg err";
+diff --git a/auth.js b/auth.js
+index f6e8e58..2986034 100644
+--- a/auth.js
++++ b/auth.js
+@@ -95,8 +95,63 @@ function canEditProject(user, projectCode) {
+   return false;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Phan quyen chi tiet theo TUNG DU AN (ACL) - chi tac dong voi vai tro
++// 'responsible' va 'viewer'. admin/manager luon FULL tren moi du an, khong
++// doi so voi truoc day (khong pha vo hanh vi dang chay tren production).
++// ---------------------------------------------------------------------------
++const PERMISSION_RANK = { VIEW: 1, UPDATE: 2, MANAGE: 3, FULL: 4 };
++const PERMISSION_LABELS = {
++  NONE: "Không có quyền",
++  VIEW: "Chỉ xem",
++  UPDATE: "Cập nhật tiến độ",
++  MANAGE: "Quản lý dự án",
++  FULL: "Toàn quyền dự án",
++};
++
++// Tra ve 'FULL' (admin/manager), mot trong 4 muc VIEW/UPDATE/MANAGE/FULL neu
++// user (vai tro responsible/viewer) duoc cap quyen tren dung du an nay, hoac
++// null neu khong duoc cap quyen gi ca (tuc la: khong duoc thay du an nay).
++function getProjectPermission(user, projectCode) {
++  if (!user) return null;
++  if (user.role === "admin" || user.role === "manager") return "FULL";
++  const row = db
++    .prepare("SELECT permission_level FROM user_project_permissions WHERE user_id = ? AND project_code = ?")
++    .get(user.id, projectCode);
++  return row ? row.permission_level : null;
++}
++function hasProjectPermissionAtLeast(user, projectCode, minLevel) {
++  const level = getProjectPermission(user, projectCode);
++  if (!level) return false;
++  return PERMISSION_RANK[level] >= PERMISSION_RANK[minLevel];
++}
++function canViewProject(user, projectCode) {
++  return hasProjectPermissionAtLeast(user, projectCode, "VIEW");
++}
++function canUpdateProject(user, projectCode) {
++  // Duoc sua tien do/trang thai/vuong mac.
++  return hasProjectPermissionAtLeast(user, projectCode, "UPDATE");
++}
++function canManageProjectFull(user, projectCode) {
++  // Duoc sua thong tin quan trong, quan ly cong viec, quan ly vat tu.
++  return hasProjectPermissionAtLeast(user, projectCode, "MANAGE");
++}
++function canDeleteProjectAcl(user, projectCode) {
++  return hasProjectPermissionAtLeast(user, projectCode, "FULL");
++}
++// Danh sach ma du an ma user duoc THAY (VIEW tro len). admin/manager: null
++// nghia la "tat ca" (khong loc).
++function visibleProjectCodesFor(user) {
++  if (!user) return [];
++  if (user.role === "admin" || user.role === "manager") return null;
++  const rows = db.prepare("SELECT project_code FROM user_project_permissions WHERE user_id = ?").all(user.id);
++  return rows.map((r) => r.project_code);
++}
++
+ module.exports = {
+   ROLE_LABELS,
++  PERMISSION_RANK,
++  PERMISSION_LABELS,
+   findUserByUsername,
+   findUserById,
+   createSession,
+@@ -107,5 +162,12 @@ module.exports = {
+   requireAuth,
+   requireRole,
+   canEditProject,
++  getProjectPermission,
++  hasProjectPermissionAtLeast,
++  canViewProject,
++  canUpdateProject,
++  canManageProjectFull,
++  canDeleteProjectAcl,
++  visibleProjectCodesFor,
+   bcrypt,
+ };
+diff --git a/db.js b/db.js
+index a32df0c..f3731c3 100644
+--- a/db.js
++++ b/db.js
+@@ -129,6 +129,27 @@ CREATE TABLE IF NOT EXISTS project_members (
+ CREATE INDEX IF NOT EXISTS idx_members_project ON project_members(project_code);
+ CREATE INDEX IF NOT EXISTS idx_members_user ON project_members(user_id);
+ 
++-- Phan quyen chi tiet theo TUNG DU AN cho tung nguoi dung (RBAC nang cao).
++-- Chi ap dung cho vai tro 'responsible' va 'viewer' - admin/manager luon
++-- toan quyen moi du an nhu truoc, khong bi anh huong boi bang nay.
++-- permission_level, tu thap den cao:
++--   VIEW   : chi xem du an (thong tin, tien do, cong viec, vuong mac)
++--   UPDATE : xem + cap nhat tien do/trang thai/vuong mac (khong sua thong
++--            tin quan trong, khong dong/sua danh sach cong viec, khong vat tu)
++--   MANAGE : xem + sua thong tin du an + quan ly cong viec + quan ly vat tu
++--   FULL   : nhu MANAGE, cong them duoc xoa chinh du an chi tiet nay
++CREATE TABLE IF NOT EXISTS user_project_permissions (
++  id INTEGER PRIMARY KEY AUTOINCREMENT,
++  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
++  project_code TEXT NOT NULL REFERENCES projects(code) ON DELETE CASCADE,
++  permission_level TEXT NOT NULL CHECK(permission_level IN ('VIEW','UPDATE','MANAGE','FULL')),
++  created_at TEXT NOT NULL,
++  updated_at TEXT NOT NULL,
++  UNIQUE(user_id, project_code)
++);
++CREATE INDEX IF NOT EXISTS idx_upp_user ON user_project_permissions(user_id);
++CREATE INDEX IF NOT EXISTS idx_upp_project ON user_project_permissions(project_code);
++
+ CREATE TABLE IF NOT EXISTS project_history (
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+   project_code TEXT,
+@@ -236,6 +257,26 @@ function seedIfNew() {
+   console.log("Đã tạo xong database. Tài khoản đăng nhập đầu tiên: admin / admin123 (đổi mật khẩu ngay).");
+ }
+ 
++// ---------------------------------------------------------------------------
++// Nang cap du lieu cu (idempotent, an toan chay lai nhieu lan): moi ban ghi
++// project_members (phan cong kieu cu, chi co "duoc sua hay khong") duoc quy
++// doi sang 1 dong trong user_project_permissions voi muc UPDATE - dung bang
++// muc quyen chinh sua ma nguoi "phu trach" dang co truoc day, de khong ai bi
++// mat quyen dang dung khi nang cap len ban co ACL chi tiet nay.
++// ---------------------------------------------------------------------------
++function migrateLegacyMembersToPermissions() {
++  const legacyRows = db.prepare("SELECT project_code, user_id FROM project_members").all();
++  if (!legacyRows.length) return;
++  const ts = new Date().toISOString();
++  const ins = db.prepare(
++    `INSERT INTO user_project_permissions (user_id, project_code, permission_level, created_at, updated_at)
++     VALUES (?,?,'UPDATE',?,?)
++     ON CONFLICT(user_id, project_code) DO NOTHING`
++  );
++  for (const r of legacyRows) ins.run(r.user_id, r.project_code, ts, ts);
++}
++
+ seedIfNew();
++migrateLegacyMembersToPermissions();
+ 
+ module.exports = { db };
+diff --git a/public_index.html b/public_index.html
+index a165353..7799988 100644
+--- a/public_index.html
++++ b/public_index.html
+@@ -212,13 +212,19 @@
+   // RBAC tren giao dien: an/khoa nut theo vai tro (server van tu kiem tra
+   // quyen o moi API - day chi la lop giao dien cho gon, khong phai lop bao mat).
+   // ---------------------------------------------------------------------
++  // Muc quyen chi tiet theo tung du an (VIEW/UPDATE/MANAGE/FULL), chi ap dung
++  // cho role 'responsible'/'viewer'. admin/manager luon coi nhu FULL moi noi.
++  function projectPermissionLevel(code) {
++    if (!CURRENT_USER) return null;
++    if (CURRENT_USER.role === "admin" || CURRENT_USER.role === "manager") return "FULL";
++    if (!code || !CURRENT_USER.permissions) return null;
++    return CURRENT_USER.permissions[code] || null;
++  }
++
+   function applyRoleUI() {
+     if (!CURRENT_USER) return;
+     var role = CURRENT_USER.role;
+     var canCreate = role === "admin" || role === "manager";
+-    var canDeleteClone = role === "admin" || role === "manager";
+-    var canEditAny = role === "admin" || role === "manager";
+-    var assigned = CURRENT_USER.assigned_codes || null; // chi co voi role 'responsible'
+ 
+     document.querySelectorAll("button").forEach(function (btn) {
+       var t = (btn.textContent || "").trim();
+@@ -239,13 +245,18 @@
+     if (!CURRENT_USER || menu.__qltkmPatched) return;
+     menu.__qltkmPatched = true;
+     var role = CURRENT_USER.role;
+-    var canDeleteClone = role === "admin" || role === "manager";
++    var isFullRole = role === "admin" || role === "manager";
++    var canClone = isFullRole; // tao du an moi van chi danh cho admin/manager
+ 
+     // Tim ma du an chi tiet tu hang <tr> gan nhat chua menu nay
+     var tr = menu.closest("tr");
+     var code = null;
+     if (tr && tr.firstElementChild) code = (tr.firstElementChild.textContent || "").trim();
+ 
++    var level = projectPermissionLevel(code); // FULL neu admin/manager, hoac VIEW/UPDATE/MANAGE/FULL/null
++    var canEditThis = isFullRole || level === "UPDATE" || level === "MANAGE" || level === "FULL";
++    var canDeleteThis = isFullRole || level === "FULL";
++
+     var buttons = Array.prototype.slice.call(menu.querySelectorAll("button"));
+     var editBtn = buttons.find(function (b) {
+       return (b.textContent || "").trim() === "Chỉnh sửa";
+@@ -254,25 +265,22 @@
+       return (b.textContent || "").trim() === "Nhân bản dự án";
+     });
+ 
+-    if (editBtn) {
+-      var canEditThis =
+-        role === "admin" ||
+-        role === "manager" ||
+-        (role === "responsible" && code && CURRENT_USER.assigned_codes && CURRENT_USER.assigned_codes.indexOf(code) !== -1);
+-      if (!canEditThis) {
+-        editBtn.disabled = true;
+-        editBtn.style.opacity = "0.4";
+-        editBtn.style.cursor = "not-allowed";
+-        editBtn.title = role === "viewer" ? "Tài khoản chỉ xem, không có quyền sửa." : "Bạn chưa được phân công dự án này.";
+-      }
++    if (editBtn && !canEditThis) {
++      editBtn.disabled = true;
++      editBtn.style.opacity = "0.4";
++      editBtn.style.cursor = "not-allowed";
++      editBtn.title =
++        level === "VIEW"
++          ? "Bạn chỉ được cấp quyền xem dự án này, không được sửa."
++          : "Bạn chưa được phân quyền trên dự án này.";
+     }
+-    if (cloneBtn && !canDeleteClone) {
++    if (cloneBtn && !canClone) {
+       cloneBtn.disabled = true;
+       cloneBtn.style.opacity = "0.4";
+       cloneBtn.style.cursor = "not-allowed";
+       cloneBtn.title = "Vai trò của bạn không có quyền nhân bản dự án.";
+     }
+-    if (canDeleteClone && code) {
++    if (canDeleteThis && code) {
+       var delBtn = document.createElement("button");
+       delBtn.textContent = "🗑 Xóa dự án";
+       delBtn.style.cssText =
+@@ -330,16 +338,16 @@
+           return;
+         }
+         CURRENT_USER = data.user;
+-        if (CURRENT_USER.role === "responsible") {
+-          realFetch("/api/auth/my-assignments")
++        if (CURRENT_USER.role === "responsible" || CURRENT_USER.role === "viewer") {
++          realFetch("/api/auth/my-permissions")
+             .then(function (r) {
+-              return r.ok ? r.json() : { project_codes: [] };
++              return r.ok ? r.json() : { permissions: {} };
+             })
+             .catch(function () {
+-              return { project_codes: [] };
++              return { permissions: {} };
+             })
+             .then(function (m) {
+-              CURRENT_USER.assigned_codes = m.project_codes || [];
++              CURRENT_USER.permissions = m.permissions || {};
+               finishBoot();
+             });
+         } else {
+@@ -366,7 +374,6 @@
+     boot();
+   }
+ })();
+-
+ </script>
+ <script type="module" crossorigin>function CH(n,t){for(var l=0;l<t.length;l++){const a=t[l];if(typeof a!="string"&&!Array.isArray(a)){for(const e in a)if(e!=="default"&&!(e in n)){const u=Object.getOwnPropertyDescriptor(a,e);u&&Object.defineProperty(n,e,u.get?u:{enumerable:!0,get:()=>a[e]})}}}return Object.freeze(Object.defineProperty(n,Symbol.toStringTag,{value:"Module"}))}(function(){const t=document.createElement("link").relList;if(t&&t.supports&&t.supports("modulepreload"))return;for(const e of document.querySelectorAll('link[rel="modulepreload"]'))a(e);new MutationObserver(e=>{for(const u of e)if(u.type==="childList")for(const c of u.addedNodes)c.tagName==="LINK"&&c.rel==="modulepreload"&&a(c)}).observe(document,{childList:!0,subtree:!0});function l(e){const u={};return e.integrity&&(u.integrity=e.integrity),e.referrerPolicy&&(u.referrerPolicy=e.referrerPolicy),e.crossOrigin==="use-credentials"?u.credentials="include":e.crossOrigin==="anonymous"?u.credentials="omit":u.credentials="same-origin",u}function a(e){if(e.ep)return;e.ep=!0;const u=l(e);fetch(e.href,u)}})();var d_=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof global<"u"?global:typeof self<"u"?self:{};function fn(n){return n&&n.__esModule&&Object.prototype.hasOwnProperty.call(n,"default")?n.default:n}var ly={exports:{}},Bo={},ay={exports:{}},cn={};/**
+  * @license React
+diff --git a/server.js b/server.js
+index 089e467..7585293 100644
+--- a/server.js
++++ b/server.js
+@@ -10,6 +10,7 @@ const fs = require("fs");
+ const { db } = require("./db.js");
+ const {
+   ROLE_LABELS,
++  PERMISSION_LABELS,
+   findUserByUsername,
+   findUserById,
+   createSession,
+@@ -19,19 +20,61 @@ const {
+   requireAuth,
+   requireRole,
+   canEditProject,
++  getProjectPermission,
++  canViewProject,
++  canUpdateProject,
++  canManageProjectFull,
++  canDeleteProjectAcl,
++  visibleProjectCodesFor,
+   bcrypt,
+ } = require("./auth.js");
+ 
+ const PORT = process.env.PORT || 3000;
++// Railway (va cac host tuong tu) chay ung dung sau 1 lop reverse proxy dam
++// nhiem TLS: nhan dien qua bien moi truong RAILWAY_ENVIRONMENT do Railway tu
++// cap, hoac NODE_ENV=production duoc cau hinh thu cong.
++const IS_PROD = !!(process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production");
+ const PUBLIC_HTML = path.join(__dirname, "public_index.html");
+ const ADMIN_HTML = path.join(__dirname, "admin-users.html");
+ const SEED_META = JSON.parse(fs.readFileSync(path.join(__dirname, "data", "seed_data.json"), "utf8"));
+ 
+ const app = express();
++if (IS_PROD) app.set("trust proxy", 1);
+ app.use(express.json({ limit: "20mb" }));
+ app.use(cookieParser());
+ app.use(attachUser);
+ 
++// ---------------------------------------------------------------------------
++// Chong do vet mat khau: gioi han so lan dang nhap sai theo tung
++// username+IP (bo nho tam trong tien trinh - du dung cho 1 instance Railway).
++// ---------------------------------------------------------------------------
++const LOGIN_MAX_ATTEMPTS = 8;
++const LOGIN_WINDOW_MS = 10 * 60 * 1000;
++const loginAttempts = new Map(); // key -> { count, firstAt }
++function loginRateKey(req, username) {
++  return (req.ip || "unknown") + "|" + String(username || "").toLowerCase();
++}
++function isLoginRateLimited(key) {
++  const rec = loginAttempts.get(key);
++  if (!rec) return false;
++  if (Date.now() - rec.firstAt > LOGIN_WINDOW_MS) {
++    loginAttempts.delete(key);
++    return false;
++  }
++  return rec.count >= LOGIN_MAX_ATTEMPTS;
++}
++function registerLoginFailure(key) {
++  const rec = loginAttempts.get(key);
++  if (!rec || Date.now() - rec.firstAt > LOGIN_WINDOW_MS) {
++    loginAttempts.set(key, { count: 1, firstAt: Date.now() });
++  } else {
++    rec.count += 1;
++  }
++}
++function clearLoginFailures(key) {
++  loginAttempts.delete(key);
++}
++
+ function now() {
+   return new Date().toISOString();
+ }
+@@ -66,15 +109,25 @@ app.get("/api/events", requireAuth, (req, res) => {
+ // ---------------------------------------------------------------------------
+ app.post("/api/auth/login", (req, res) => {
+   const { username, password } = req.body || {};
++  const rateKey = loginRateKey(req, username);
++  if (isLoginRateLimited(rateKey)) {
++    return err(res, 429, "Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau ít phút.");
++  }
+   const u = findUserByUsername(String(username || "").trim());
+-  if (!u || !u.active) return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
++  if (!u || !u.active) {
++    registerLoginFailure(rateKey);
++    return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
++  }
+   if (!bcrypt.compareSync(String(password || ""), u.password_hash)) {
++    registerLoginFailure(rateKey);
+     return err(res, 401, "Sai tên đăng nhập hoặc mật khẩu.");
+   }
++  clearLoginFailures(rateKey);
+   const { token, expires } = createSession(u.id);
+   res.cookie("sid", token, {
+     httpOnly: true,
+     sameSite: "lax",
++    secure: IS_PROD,
+     expires,
+   });
+   res.json({ user: publicUser(u) });
+@@ -141,9 +194,24 @@ app.get("/api/projects-list-for-assignment", requireRole("admin", "manager"), (r
+   res.json({ projects: rows });
+ });
+ app.get("/api/auth/my-assignments", requireAuth, (req, res) => {
+-  const rows = db.prepare("SELECT project_code FROM project_members WHERE user_id = ?").all(req.user.id);
++  // Tuong thich nguoc: danh sach ma du an ma nguoi dung hien tai duoc SUA
++  // (tuc muc quyen UPDATE tro len trong bang phan quyen chi tiet moi).
++  const rows = db
++    .prepare("SELECT project_code FROM user_project_permissions WHERE user_id = ? AND permission_level != 'VIEW'")
++    .all(req.user.id);
+   res.json({ project_codes: rows.map((r) => r.project_code) });
+ });
++app.get("/api/auth/my-permissions", requireAuth, (req, res) => {
++  if (req.user.role === "admin" || req.user.role === "manager") {
++    return res.json({ full_access: true, permissions: {} });
++  }
++  const rows = db
++    .prepare("SELECT project_code, permission_level FROM user_project_permissions WHERE user_id = ?")
++    .all(req.user.id);
++  const permissions = {};
++  rows.forEach((r) => (permissions[r.project_code] = r.permission_level));
++  res.json({ full_access: false, permissions });
++});
+ app.get("/api/members/:userId", requireRole("admin", "manager"), (req, res) => {
+   const rows = db.prepare("SELECT project_code FROM project_members WHERE user_id = ?").all(Number(req.params.userId));
+   res.json({ project_codes: rows.map((r) => r.project_code) });
+@@ -164,6 +232,75 @@ app.put("/api/members/:userId", requireRole("admin", "manager"), (req, res) => {
+   res.json({ ok: true });
+ });
+ 
++// ---------------------------------------------------------------------------
++// Phan quyen chi tiet theo TUNG DU AN (ACL: VIEW / UPDATE / MANAGE / FULL)
++// Chi admin duoc xem/sua - day la kenh chinh de gan quyen cho vai tro
++// 'responsible' va 'viewer'. (Xem auth.js: admin/manager luon FULL moi du an
++// nen khong can - va khong bi anh huong boi - bang nay.)
++// ---------------------------------------------------------------------------
++const VALID_PERMISSION_LEVELS = ["VIEW", "UPDATE", "MANAGE", "FULL"];
++app.get("/api/users/:userId/projects", requireRole("admin"), (req, res) => {
++  const userId = Number(req.params.userId);
++  const rows = db
++    .prepare(
++      `SELECT upp.project_code, upp.permission_level, p.name AS project_name, p.parent_code
++       FROM user_project_permissions upp
++       JOIN projects p ON p.code = upp.project_code
++       WHERE upp.user_id = ?
++       ORDER BY upp.project_code`
++    )
++    .all(userId);
++  res.json({
++    projects: rows.map((r) => ({
++      project_id: r.project_code,
++      project_code: r.project_code,
++      project_name: r.project_name,
++      parent_code: r.parent_code,
++      permission: r.permission_level,
++      permission_label: PERMISSION_LABELS[r.permission_level] || r.permission_level,
++    })),
++  });
++});
++app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
++  const userId = Number(req.params.userId);
++  const u = findUserById(userId);
++  if (!u) return err(res, 404, "Không tìm thấy người dùng.");
++  const rawList = Array.isArray(req.body)
++    ? req.body
++    : req.body && Array.isArray(req.body.permissions)
++    ? req.body.permissions
++    : null;
++  if (!rawList) return err(res, 400, 'Dữ liệu không hợp lệ - cần một mảng [{ "project_id": "...", "permission": "VIEW|UPDATE|MANAGE|FULL" }].');
++
++  const clean = [];
++  for (const item of rawList) {
++    const code = item && (item.project_id || item.project_code);
++    const level = String((item && (item.permission || item.permission_level)) || "").toUpperCase();
++    if (!code) continue;
++    if (!VALID_PERMISSION_LEVELS.includes(level)) {
++      return err(res, 400, `Mức quyền không hợp lệ cho dự án "${code}": "${item.permission}".`);
++    }
++    clean.push({ code, level });
++  }
++
++  const ts = now();
++  db.exec("BEGIN");
++  try {
++    db.prepare("DELETE FROM user_project_permissions WHERE user_id = ?").run(userId);
++    const ins = db.prepare(
++      `INSERT INTO user_project_permissions (user_id, project_code, permission_level, created_at, updated_at)
++       VALUES (?,?,?,?,?)
++       ON CONFLICT(user_id, project_code) DO UPDATE SET permission_level = excluded.permission_level, updated_at = excluded.updated_at`
++    );
++    clean.forEach((it) => ins.run(userId, it.code, it.level, ts, ts));
++    db.exec("COMMIT");
++  } catch (e) {
++    db.exec("ROLLBACK");
++    return err(res, 500, "Lưu phân quyền dự án thất bại: " + e.message);
++  }
++  res.json({ ok: true, count: clean.length });
++});
++
+ // ---------------------------------------------------------------------------
+ // Helpers: doc du lieu tinh (excel goc) va dung chung
+ // ---------------------------------------------------------------------------
+@@ -223,8 +360,24 @@ function rowToAddedChild(row) {
+   return rowToOverride(row); // cung shape voi override, du du de day thang vao addedChildren
+ }
+ 
+-function buildBootstrap() {
+-  const projectRows = db.prepare("SELECT * FROM projects WHERE deleted_at IS NULL").all();
++function buildBootstrap(user) {
++  let projectRows = db.prepare("SELECT * FROM projects WHERE deleted_at IS NULL").all();
++
++  // Loc theo quyen: admin/manager thay tat ca (visibleCodes === null). Voi
++  // 'responsible'/'viewer', chi thay du an CHI TIET duoc cap quyen (VIEW tro
++  // len) - va du an TONG (cha) cua no de cay khong bi "mo coi" tren giao dien
++  // (khong lo them cac du an chi tiet anh em khac chua duoc cap quyen).
++  const visibleCodes = visibleProjectCodesFor(user);
++  if (visibleCodes !== null) {
++    const visibleSet = new Set(visibleCodes);
++    const parentCodesNeeded = new Set();
++    projectRows.forEach((r) => {
++      if (r.parent_code && visibleSet.has(r.code)) parentCodesNeeded.add(r.parent_code);
++    });
++    projectRows = projectRows.filter((r) => visibleSet.has(r.code) || (!r.parent_code && parentCodesNeeded.has(r.code)));
++  }
++  const visibleFinalSet = new Set(projectRows.map((r) => r.code));
++
+   const byCode = {};
+   projectRows.forEach((r) => (byCode[r.code] = r));
+ 
+@@ -263,6 +416,7 @@ function buildBootstrap() {
+        WHERE p.deleted_at IS NULL ORDER BY i.id`
+     )
+     .all()
++    .filter((i) => visibleFinalSet.has(i.project_code))
+     .map((i) => ({
+       issue_id: "ISS-USR-" + i.id,
+       parent_code: i.p_parent_code,
+@@ -286,6 +440,7 @@ function buildBootstrap() {
+        WHERE p.deleted_at IS NULL ORDER BY m.id`
+     )
+     .all()
++    .filter((m) => visibleFinalSet.has(m.project_code))
+     .map((m) => ({
+       child_code: m.project_code,
+       material_name: m.material_name,
+@@ -397,7 +552,7 @@ function nextChildCode(parentCode, category) {
+ // API du lieu chinh
+ // ---------------------------------------------------------------------------
+ app.get("/api/bootstrap", requireAuth, (req, res) => {
+-  res.json(buildBootstrap());
++  res.json(buildBootstrap(req.user));
+ });
+ 
+ app.get("/api/next-code", requireAuth, (req, res) => {
+@@ -460,12 +615,17 @@ function payloadToFields(payload) {
+     cancel_flag: payload.status === "Không thực hiện/Hủy DA" ? "Có" : "Không",
+   };
+ }
++// Ep ve mang [] neu client gui sai kieu (vd chuoi/so/null) - tranh 500 loi
++// "X.forEach is not a function" khi payload khong dung dang mong doi.
++function asArray(v) {
++  return Array.isArray(v) ? v : [];
++}
+ function replaceTasks(code, tasks) {
+   db.prepare("DELETE FROM project_tasks WHERE project_code = ?").run(code);
+   const ins = db.prepare(
+     "INSERT INTO project_tasks (project_code, task_name, responsible_person, start_date, due_date, pct_done, status, note, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+   );
+-  (tasks || []).forEach((t, idx) => {
++  asArray(tasks).forEach((t, idx) => {
+     ins.run(code, t.task_name || "", t.responsible_person || null, t.start_date || null, t.due_date || null, t.pct_done ?? 0, t.status || "Chưa thực hiện", t.note || null, idx, now(), now());
+   });
+ }
+@@ -474,7 +634,7 @@ function replaceIssues(code, issues, userName) {
+   const ins = db.prepare(
+     "INSERT INTO project_issues (project_code, content, cause, severity, responsible_unit, responsible_person, due_date, status, note, source, created_at, updated_at, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+   );
+-  (issues || []).forEach((it) => {
++  asArray(issues).forEach((it) => {
+     ins.run(
+       code, it.content || "", it.cause || null, it.severity || "Trung bình",
+       it.coordination_unit || null, it.responsible_person || null, it.due_date || null,
+@@ -487,7 +647,7 @@ function replaceMaterials(code, materials, userName) {
+   const ins = db.prepare(
+     "INSERT INTO project_materials (project_code, material_code, material_name, unit, planned_qty, received_qty, used_qty, note, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?)"
+   );
+-  (materials || []).forEach((mt) => {
++  asArray(materials).forEach((mt) => {
+     ins.run(
+       code, mt.material_code || null, mt.material_name || "", mt.unit || null,
+       mt.planned_qty === "" || mt.planned_qty == null ? null : Number(mt.planned_qty),
+@@ -547,44 +707,85 @@ app.post("/api/projects", requireRole("admin", "manager"), (req, res) => {
+   }
+ });
+ 
++// Cac truong "quan trong" cua du an - chi sua duoc khi la admin/manager hoac
++// duoc cap quyen MANAGE/FULL tren du an do. Muc UPDATE chi duoc dong vao tien
++// do/trang thai/cac truong con lai (xem applyPermissionTierToFields).
++const PROJECT_CORE_FIELDS = [
++  "name", "category", "region", "design_type", "contractor", "exec_year",
++  "responsible_unit", "responsible_person", "priority_level",
++  "planned_km_or_station", "budget_value", "contract_value", "settlement_value",
++  "planned_start_date", "planned_end_date",
++];
++// Neu nguoi sua chi co quyen UPDATE (khong phai admin/manager/MANAGE/FULL):
++// giu nguyen cac truong "quan trong" nhu du lieu cu, chi cho phep di qua cac
++// thay doi ve tien do/trang thai/ngay thuc te - dung nhu dac ta "Cap nhat
++// tien do" (khong duoc doi thong tin quan trong cua du an).
++function applyPermissionTierToFields(f, row, tier) {
++  if (tier === "UPDATE") {
++    const restricted = Object.assign({}, f);
++    PROJECT_CORE_FIELDS.forEach((field) => {
++      restricted[field] = row[field];
++    });
++    return restricted;
++  }
++  return f; // admin/manager/MANAGE/FULL: toan quyen cac truong
++}
++
+ app.put("/api/projects/:code", requireAuth, (req, res) => {
+-  const code = decodeURIComponent(req.params.code);
+-  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+-  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+-  if (!canEditProject(req.user, code)) return err(res, 403, "Bạn không có quyền sửa dự án này.");
++  try {
++    const code = decodeURIComponent(req.params.code);
++    const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
++    if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+ 
+-  const payload = req.body || {};
+-  const clientVersion = payload.__version;
+-  if (clientVersion != null && Number(clientVersion) !== row.version) {
+-    return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+-  }
+-  const f = payloadToFields(payload);
+-  const info = db
+-    .prepare(
+-      `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
+-        responsible_unit=?, responsible_person=?, priority_level=?, status=?, planned_km_or_station=?,
+-        budget_value=?, contract_value=?, settlement_value=?, planned_start_date=?, planned_end_date=?,
+-        actual_start_date=?, actual_end_date=?, volume_done=?, progress=?, cancel_flag=?,
+-        version=version+1, updated_at=?, updated_by=?
+-       WHERE code=? AND version=?`
+-    )
+-    .run(
+-      f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
+-      f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station,
+-      f.budget_value, f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date,
+-      f.actual_start_date, f.actual_end_date, f.volume_done, f.progress, f.cancel_flag,
+-      now(), req.user.display_name, code, row.version
+-    );
+-  if (info.changes === 0) {
+-    return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
++    const isFullRole = req.user.role === "admin" || req.user.role === "manager";
++    const level = isFullRole ? "FULL" : getProjectPermission(req.user, code);
++    if (!level || level === "VIEW") {
++      return err(res, 403, "Bạn không có quyền sửa dự án này.");
++    }
++    // Tuong duong "tier" dung de quyet dinh pham vi duoc sua: UPDATE = chi
++    // tien do/trang thai/vuong mac; MANAGE/FULL (hoac admin/manager) = toan
++    // quyen sua thong tin + cong viec + vat tu cua du an nay.
++    const tier = level === "UPDATE" ? "UPDATE" : "MANAGE";
++
++    const payload = req.body || {};
++    const clientVersion = payload.__version;
++    if (clientVersion != null && Number(clientVersion) !== row.version) {
++      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
++    }
++    const f = applyPermissionTierToFields(payloadToFields(payload), row, tier);
++    const info = db
++      .prepare(
++        `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
++          responsible_unit=?, responsible_person=?, priority_level=?, status=?, planned_km_or_station=?,
++          budget_value=?, contract_value=?, settlement_value=?, planned_start_date=?, planned_end_date=?,
++          actual_start_date=?, actual_end_date=?, volume_done=?, progress=?, cancel_flag=?,
++          version=version+1, updated_at=?, updated_by=?
++         WHERE code=? AND version=?`
++      )
++      .run(
++        f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
++        f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station,
++        f.budget_value, f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date,
++        f.actual_start_date, f.actual_end_date, f.volume_done, f.progress, f.cancel_flag,
++        now(), req.user.display_name, code, row.version
++      );
++    if (info.changes === 0) {
++      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
++    }
++    // Muc UPDATE: khong duoc dong vao danh sach cong viec / vat tu, chi duoc
++    // cap nhat "vuong mac" (issues) nhu dac ta.
++    if (tier !== "UPDATE") {
++      replaceTasks(code, payload.tasks);
++      replaceMaterials(code, payload.materials, req.user.display_name);
++    }
++    replaceIssues(code, payload.issues, req.user.display_name);
++    logHistory(code, req.user.display_name, "update", row, f);
++    const newRow = db.prepare("SELECT version FROM projects WHERE code = ?").get(code);
++    broadcastChange({ code, action: "update", by: req.user.display_name });
++    res.json({ ok: true, child_code: code, version: newRow.version });
++  } catch (e) {
++    err(res, 500, "Cập nhật dự án thất bại: " + (IS_PROD ? "Đã có lỗi ở máy chủ." : e.message));
+   }
+-  replaceTasks(code, payload.tasks);
+-  replaceIssues(code, payload.issues, req.user.display_name);
+-  replaceMaterials(code, payload.materials, req.user.display_name);
+-  logHistory(code, req.user.display_name, "update", row, f);
+-  const newRow = db.prepare("SELECT version FROM projects WHERE code = ?").get(code);
+-  broadcastChange({ code, action: "update", by: req.user.display_name });
+-  res.json({ ok: true, child_code: code, version: newRow.version });
+ });
+ 
+ app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res) => {
+@@ -638,8 +839,12 @@ app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res
+   }
+ });
+ 
+-app.delete("/api/projects/:code", requireRole("admin", "manager"), (req, res) => {
++app.delete("/api/projects/:code", requireAuth, (req, res) => {
+   const code = decodeURIComponent(req.params.code);
++  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
++  if (!isFullRole && !canDeleteProjectAcl(req.user, code)) {
++    return err(res, 403, "Bạn không có quyền xóa dự án này.");
++  }
+   const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+   if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+   if (!row.parent_code) {
+@@ -656,6 +861,10 @@ app.delete("/api/projects/:code", requireRole("admin", "manager"), (req, res) =>
+ 
+ app.get("/api/projects/:code/history", requireAuth, (req, res) => {
+   const code = decodeURIComponent(req.params.code);
++  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
++  if (!isFullRole && !canViewProject(req.user, code)) {
++    return err(res, 403, "Bạn không có quyền xem lịch sử dự án này.");
++  }
+   const rows = db
+     .prepare("SELECT * FROM project_history WHERE project_code = ? ORDER BY id DESC LIMIT 200")
+     .all(code);
+@@ -669,7 +878,7 @@ app.post("/api/import/commit", requireAuth, (req, res) => {
+   err(res, 501, "Chức năng Nhập từ Excel chưa được hỗ trợ ở bản này.");
+ });
+ app.get("/api/export", requireAuth, (req, res) => {
+-  res.json(buildBootstrap());
++  res.json(buildBootstrap(req.user));
+ });
+ 
+ // ---------------------------------------------------------------------------
+@@ -682,6 +891,24 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
+   res.sendFile(PUBLIC_HTML);
+ });
+ 
++// API khong khop route nao o tren -> tra JSON 404 (thay vi trang HTML 404
++// mac dinh cua Express, de fetch() phia client luon parse duoc .json()).
++app.use("/api", (req, res) => {
++  res.status(404).json({ error: "Không tìm thấy API." });
++});
++
++// Loi bat bat ngo (unhandled) o bat ky route nao o tren: tra ve JSON gon
++// gang thay vi trang loi HTML mac dinh cua Express (rat de lo ca duong dan
++// file server that len nguoi dung/console trinh duyet o che do khong phai
++// production). Log day du ra console server de con debug.
++app.use((errObj, req, res, next) => {
++  console.error("Unhandled error:", errObj);
++  if (res.headersSent) return next(errObj);
++  res.status(500).json({
++    error: IS_PROD ? "Đã có lỗi xảy ra ở máy chủ." : String((errObj && errObj.message) || errObj),
++  });
++});
++
+ app.listen(PORT, () => {
+   console.log(`QL TKM Web App đang chạy tại http://localhost:${PORT}`);
+ });
+diff --git a/shim_frontend.js b/shim_frontend.js
+index 7aeb4e9..4bb1955 100644
+--- a/shim_frontend.js
++++ b/shim_frontend.js
+@@ -196,13 +196,19 @@
+   // RBAC tren giao dien: an/khoa nut theo vai tro (server van tu kiem tra
+   // quyen o moi API - day chi la lop giao dien cho gon, khong phai lop bao mat).
+   // ---------------------------------------------------------------------
++  // Muc quyen chi tiet theo tung du an (VIEW/UPDATE/MANAGE/FULL), chi ap dung
++  // cho role 'responsible'/'viewer'. admin/manager luon coi nhu FULL moi noi.
++  function projectPermissionLevel(code) {
++    if (!CURRENT_USER) return null;
++    if (CURRENT_USER.role === "admin" || CURRENT_USER.role === "manager") return "FULL";
++    if (!code || !CURRENT_USER.permissions) return null;
++    return CURRENT_USER.permissions[code] || null;
++  }
++
+   function applyRoleUI() {
+     if (!CURRENT_USER) return;
+     var role = CURRENT_USER.role;
+     var canCreate = role === "admin" || role === "manager";
+-    var canDeleteClone = role === "admin" || role === "manager";
+-    var canEditAny = role === "admin" || role === "manager";
+-    var assigned = CURRENT_USER.assigned_codes || null; // chi co voi role 'responsible'
+ 
+     document.querySelectorAll("button").forEach(function (btn) {
+       var t = (btn.textContent || "").trim();
+@@ -223,13 +229,18 @@
+     if (!CURRENT_USER || menu.__qltkmPatched) return;
+     menu.__qltkmPatched = true;
+     var role = CURRENT_USER.role;
+-    var canDeleteClone = role === "admin" || role === "manager";
++    var isFullRole = role === "admin" || role === "manager";
++    var canClone = isFullRole; // tao du an moi van chi danh cho admin/manager
+ 
+     // Tim ma du an chi tiet tu hang <tr> gan nhat chua menu nay
+     var tr = menu.closest("tr");
+     var code = null;
+     if (tr && tr.firstElementChild) code = (tr.firstElementChild.textContent || "").trim();
+ 
++    var level = projectPermissionLevel(code); // FULL neu admin/manager, hoac VIEW/UPDATE/MANAGE/FULL/null
++    var canEditThis = isFullRole || level === "UPDATE" || level === "MANAGE" || level === "FULL";
++    var canDeleteThis = isFullRole || level === "FULL";
++
+     var buttons = Array.prototype.slice.call(menu.querySelectorAll("button"));
+     var editBtn = buttons.find(function (b) {
+       return (b.textContent || "").trim() === "Chỉnh sửa";
+@@ -238,25 +249,22 @@
+       return (b.textContent || "").trim() === "Nhân bản dự án";
+     });
+ 
+-    if (editBtn) {
+-      var canEditThis =
+-        role === "admin" ||
+-        role === "manager" ||
+-        (role === "responsible" && code && CURRENT_USER.assigned_codes && CURRENT_USER.assigned_codes.indexOf(code) !== -1);
+-      if (!canEditThis) {
+-        editBtn.disabled = true;
+-        editBtn.style.opacity = "0.4";
+-        editBtn.style.cursor = "not-allowed";
+-        editBtn.title = role === "viewer" ? "Tài khoản chỉ xem, không có quyền sửa." : "Bạn chưa được phân công dự án này.";
+-      }
++    if (editBtn && !canEditThis) {
++      editBtn.disabled = true;
++      editBtn.style.opacity = "0.4";
++      editBtn.style.cursor = "not-allowed";
++      editBtn.title =
++        level === "VIEW"
++          ? "Bạn chỉ được cấp quyền xem dự án này, không được sửa."
++          : "Bạn chưa được phân quyền trên dự án này.";
+     }
+-    if (cloneBtn && !canDeleteClone) {
++    if (cloneBtn && !canClone) {
+       cloneBtn.disabled = true;
+       cloneBtn.style.opacity = "0.4";
+       cloneBtn.style.cursor = "not-allowed";
+       cloneBtn.title = "Vai trò của bạn không có quyền nhân bản dự án.";
+     }
+-    if (canDeleteClone && code) {
++    if (canDeleteThis && code) {
+       var delBtn = document.createElement("button");
+       delBtn.textContent = "🗑 Xóa dự án";
+       delBtn.style.cssText =
+@@ -314,16 +322,16 @@
+           return;
+         }
+         CURRENT_USER = data.user;
+-        if (CURRENT_USER.role === "responsible") {
+-          realFetch("/api/auth/my-assignments")
++        if (CURRENT_USER.role === "responsible" || CURRENT_USER.role === "viewer") {
++          realFetch("/api/auth/my-permissions")
+             .then(function (r) {
+-              return r.ok ? r.json() : { project_codes: [] };
++              return r.ok ? r.json() : { permissions: {} };
+             })
+             .catch(function () {
+-              return { project_codes: [] };
++              return { permissions: {} };
+             })
+             .then(function (m) {
+-              CURRENT_USER.assigned_codes = m.project_codes || [];
++              CURRENT_USER.permissions = m.permissions || {};
+               finishBoot();
+             });
+         } else {
