@@ -28,6 +28,14 @@
   .chips{display:flex;flex-wrap:wrap;gap:6px;max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px}
   .chip{font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer;user-select:none}
   .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .permlist{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px}
+  .permrow{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}
+  .permrow:last-child{border-bottom:none}
+  .permrow .pname{flex:1;min-width:0}
+  .permrow .pname b{font-size:12.5px}
+  .permrow .pname span{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .permrow select{width:170px;flex:none}
+  .permrow input[type=checkbox]{width:16px;height:16px;flex:none}
 </style>
 </head>
 <body>
@@ -64,11 +72,15 @@
   </div>
 
   <div class="panel" id="assignPanel" style="display:none">
-    <h2>Phân công dự án cho: <span id="assignUserName"></span></h2>
-    <p class="muted">Chỉ áp dụng với vai trò "Người phụ trách" — họ chỉ sửa được các dự án chi tiết được tick chọn dưới đây.</p>
-    <div class="chips" id="assignChips"></div>
+    <h2>Phân quyền dự án cho: <span id="assignUserName"></span></h2>
+    <p class="muted">
+      Chỉ áp dụng với vai trò "Người phụ trách"/"Người xem". Tick chọn dự án
+      người này được tham gia, rồi chọn mức quyền cho từng dự án. Dự án không
+      được tick sẽ <b>không hiển thị</b> với người này khi họ đăng nhập.
+    </p>
+    <div class="permlist" id="assignChips"></div>
     <div style="margin-top:12px;display:flex;gap:8px">
-      <button class="primary" id="btnSaveAssign">Lưu phân công</button>
+      <button class="primary" id="btnSaveAssign">Lưu phân quyền</button>
       <button id="btnCancelAssign">Đóng</button>
     </div>
     <div class="msg" id="assignMsg"></div>
@@ -99,9 +111,9 @@ function loadUsers() {
         "<td></td>";
       var tdActions = tr.lastElementChild;
 
-      if (u.role === "responsible") {
+      if (u.role === "responsible" || u.role === "viewer") {
         var assignBtn = document.createElement("button");
-        assignBtn.textContent = "Phân công dự án";
+        assignBtn.textContent = "🔑 Phân quyền dự án";
         assignBtn.onclick = function(){ openAssign(u); };
         tdActions.appendChild(assignBtn);
       }
@@ -150,6 +162,14 @@ document.getElementById("btnCreate").addEventListener("click", function(){
     .catch(function(e){ msg.className = "msg err"; msg.textContent = e.message; });
 });
 
+var PERM_OPTIONS = [
+  {value:"", label:"Không có quyền"},
+  {value:"VIEW", label:"Chỉ xem"},
+  {value:"UPDATE", label:"Cập nhật tiến độ"},
+  {value:"MANAGE", label:"Quản lý dự án"},
+  {value:"FULL", label:"Toàn quyền dự án"},
+];
+
 function openAssign(user) {
   document.getElementById("assignPanel").style.display = "block";
   document.getElementById("assignUserName").textContent = user.display_name + " (" + user.username + ")";
@@ -157,25 +177,53 @@ function openAssign(user) {
   chipsEl.innerHTML = "Đang tải...";
   Promise.all([
     allProjects.length ? Promise.resolve({projects: allProjects}) : api("/api/projects-list-for-assignment"),
-    api("/api/members/" + user.id),
+    api("/api/users/" + user.id + "/projects"),
   ]).then(function(res){
     allProjects = res[0].projects;
-    var assigned = res[1].project_codes;
+    var assignedMap = {};
+    (res[1].projects || []).forEach(function(p){ assignedMap[p.project_code] = p.permission; });
     chipsEl.innerHTML = "";
     allProjects.filter(function(p){ return p.parent_code; }).forEach(function(p){
-      var chip = document.createElement("div");
-      chip.className = "chip" + (assigned.indexOf(p.code) !== -1 ? " on" : "");
-      chip.textContent = p.code + " — " + p.name;
-      chip.dataset.code = p.code;
-      chip.onclick = function(){ chip.classList.toggle("on"); };
-      chipsEl.appendChild(chip);
+      var current = assignedMap[p.code] || "";
+      var row = document.createElement("div");
+      row.className = "permrow";
+      row.dataset.code = p.code;
+
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!current;
+
+      var nameWrap = document.createElement("div");
+      nameWrap.className = "pname";
+      nameWrap.innerHTML = "<b>" + p.code + "</b><span>" + p.name + "</span>";
+
+      var sel = document.createElement("select");
+      PERM_OPTIONS.filter(function(o){ return o.value; }).forEach(function(o){
+        var opt = document.createElement("option");
+        opt.value = o.value; opt.textContent = o.label;
+        if (o.value === (current || "VIEW")) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.disabled = !cb.checked;
+
+      cb.onchange = function(){ sel.disabled = !cb.checked; };
+
+      row.appendChild(cb);
+      row.appendChild(nameWrap);
+      row.appendChild(sel);
+      chipsEl.appendChild(row);
     });
     document.getElementById("btnSaveAssign").onclick = function(){
-      var codes = Array.prototype.slice.call(chipsEl.querySelectorAll(".chip.on")).map(function(c){ return c.dataset.code; });
-      api("/api/members/" + user.id, {method:"PUT", body: JSON.stringify({project_codes: codes})})
+      var rows = Array.prototype.slice.call(chipsEl.querySelectorAll(".permrow"));
+      var permissions = rows
+        .filter(function(r){ return r.querySelector("input[type=checkbox]").checked; })
+        .map(function(r){
+          return { project_id: r.dataset.code, permission: r.querySelector("select").value };
+        });
+      api("/api/users/" + user.id + "/project-permissions", {method:"PUT", body: JSON.stringify({permissions: permissions})})
         .then(function(){
           document.getElementById("assignMsg").className = "msg ok";
-          document.getElementById("assignMsg").textContent = "Đã lưu phân công.";
+          document.getElementById("assignMsg").textContent = "Đã lưu phân quyền.";
         })
         .catch(function(e){
           document.getElementById("assignMsg").className = "msg err";
