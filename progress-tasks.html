@@ -343,8 +343,10 @@ function renderStages(data) {
 
       var tdPct = document.createElement("td");
       var inp = document.createElement("input");
-      inp.type = "number"; inp.min = 0; inp.max = 100; inp.step = 1;
-      inp.value = Math.round((t.pct_done||0)*100);
+      inp.type = "number"; inp.min = 0; inp.max = 100; inp.step = "0.01";
+      // Giu toi 2 chu so thap phan (vd 33.4%) de khong lam tron mat du lieu
+      // that su cua cac cong viec khac moi khi luu ca bang.
+      inp.value = Math.round((t.pct_done||0)*100*100)/100;
       inp.dataset.weight = t.weight_pct;
       tdPct.appendChild(inp);
       tdPct.appendChild(document.createTextNode(" %"));
