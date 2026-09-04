@@ -1,1 +1,475 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Sửa tiến độ chi tiết — QL Tiến độ Dự án TKM</title>
+<style>
+  :root{--navy:#0f2f5b;--accent:#2563eb;--border:#e2e6ec;--bg:#f4f6f9;--text:#1f2430;--muted:#6b7280;--ok:#15803d;--okbg:#e9f7ef;--warn:#b45309;--warnbg:#fef3e0;--bad:#b91c1c;--badbg:#fdecec}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text)}
+  header{background:var(--navy);color:#fff;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+  header a{color:#bfdbfe;text-decoration:none;font-size:13px;font-weight:600}
+  main{max-width:1180px;margin:24px auto;padding:0 16px}
+  .panel{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 1px 2px rgba(16,24,40,.06)}
+  h2{margin:0 0 6px;font-size:16px}
+  h3{margin:0 0 10px;font-size:14px}
+  p.muted, .muted{color:var(--muted);font-size:12.5px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 7px;border-bottom:1px solid var(--border);vertical-align:middle}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;white-space:nowrap}
+  input[type=number]{width:64px;padding:6px 7px;border:1px solid var(--border);border-radius:7px;font-size:12.5px}
+  input[type=date]{width:132px;padding:5px 6px;border:1px solid var(--border);border-radius:7px;font-size:12px}
+  select{padding:6px 8px;border:1px solid var(--border);border-radius:7px;font-size:12.5px}
+  button{padding:8px 14px;border-radius:7px;border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:600;font-size:12.5px}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .msg{font-size:12.5px;margin-top:10px}
+  .msg.err{color:#dc2626}
+  .msg.ok{color:var(--ok)}
+  .picker{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+  .picker>div{flex:1;min-width:260px}
+  label{font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px}
+  select#projectPicker{width:100%}
+  .totalBox{display:flex;align-items:center;gap:28px;background:var(--okbg);border:1px solid #bbf0cc;border-radius:10px;padding:14px 18px;margin-bottom:18px;flex-wrap:wrap}
+  .totalBox.warn{background:var(--warnbg);border-color:#fbd38d}
+  .totalBox.bad{background:var(--badbg);border-color:#f3b4b4}
+  .totalBox .big{font-size:26px;font-weight:800;color:var(--ok)}
+  .totalBox.warn .big{color:var(--warn)}
+  .totalBox.bad .big{color:var(--bad)}
+  .stageHead{display:flex;justify-content:space-between;align-items:baseline;margin:18px 0 6px}
+  .stageHead b{font-size:13.5px}
+  .stageHead span{font-size:12.5px;color:var(--muted)}
+  .wpct{color:var(--muted);font-size:11.5px;white-space:nowrap}
+  .rowUnsaved{background:#fff8e6}
+  .taskname{max-width:220px}
+  .tableWrap{overflow-x:auto}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+  .badge.ok{background:#e9f7ef;color:var(--ok)}
+  .badge.warn{background:var(--warnbg);color:var(--warn)}
+  .badge.bad{background:var(--badbg);color:var(--bad)}
+  .rollupTable td, .rollupTable th{white-space:nowrap}
+</style>
+</head>
+<body>
+<header>
+  <div><b>📈 Sửa tiến độ chi tiết dự án</b> — QL Tiến độ Dự án TKM</div>
+  <div><a href="/">← Về trang chính</a></div>
+</header>
+<main>
+  <div class="panel">
+    <h2>Chọn dự án</h2>
+    <p class="muted">
+      Chọn <b>dự án chi tiết</b> để sửa từng công việc trong bảng tiến độ 4 giai
+      đoạn (lấy từ Excel gốc) — mỗi công việc có trọng số cố định, % hoàn
+      thành của cả dự án được <b>tự động tính lại</b> = tổng (trọng số × %
+      hoàn thành) mỗi khi bạn lưu. Không cần và không nên sửa ô "% hoàn thành"
+      ở form "✎ Chỉnh sửa" thông thường nữa — số đó sẽ bị ghi đè lại đúng
+      bằng số tính ra ở đây.
+      Bạn cũng có thể nhập thêm <b>Ngày bắt đầu/kết thúc</b> (kế hoạch và
+      thực tế) cho từng công việc để hệ thống tự tính ra <b>ngày dự
+      kiến/thực tế hoàn thành</b> của dự án — và của cả <b>dự án tổng</b> (khi
+      chọn dự án tổng bên dưới).
+    </p>
+    <div class="picker">
+      <div>
+        <label>Dự án</label>
+        <select id="projectPicker"><option value="">— Đang tải danh sách —</option></select>
+      </div>
+      <div style="flex:none">
+        <button id="btnLoad">Mở</button>
+      </div>
+    </div>
+    <div class="msg" id="pickerMsg"></div>
+  </div>
 
+  <div id="rollupArea" style="display:none">
+    <div class="panel">
+      <h2>Thời gian hoàn thành — Dự án tổng: <span id="rollupCode"></span></h2>
+      <p class="muted">Dự án tổng được coi là <b>hoàn thành</b> khi tất cả dự án chi tiết bên trong đạt 100%. Ngày hoàn thành của dự án tổng = ngày hoàn thành (thực tế hoặc dự kiến) <b>muộn nhất</b> trong số các dự án chi tiết.</p>
+      <div class="totalBox" id="rollupBox">
+        <div>
+          <div class="muted">TRẠNG THÁI</div>
+          <div class="big" id="rollupStatus">—</div>
+        </div>
+        <div>
+          <div class="muted">NGÀY HOÀN THÀNH (THỰC TẾ/DỰ KIẾN)</div>
+          <div class="big" id="rollupDate">—</div>
+        </div>
+        <div class="muted" id="rollupCount"></div>
+      </div>
+      <div class="tableWrap">
+        <table class="rollupTable">
+          <thead><tr><th>Dự án chi tiết</th><th>Trạng thái</th><th>Ngày hoàn thành (thực tế/dự kiến)</th></tr></thead>
+          <tbody id="rollupTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="editArea" style="display:none">
+    <div class="totalBox" id="progressBox">
+      <div>
+        <div class="muted">% HOÀN THÀNH DỰ ÁN (tính từ bảng bên dưới)</div>
+        <div class="big" id="liveTotal">0%</div>
+      </div>
+      <div class="muted" id="savedTotal"></div>
+    </div>
+    <div class="panel">
+      <h2>Thời gian hoàn thành dự án</h2>
+      <p class="muted" id="timelineNote"></p>
+      <div class="totalBox" id="timelineBox">
+        <div>
+          <div class="muted">TRẠNG THÁI</div>
+          <div class="big" id="timelineStatus">—</div>
+        </div>
+        <div>
+          <div class="muted">NGÀY HOÀN THÀNH (THỰC TẾ/DỰ KIẾN)</div>
+          <div class="big" id="timelineDate">—</div>
+        </div>
+        <div>
+          <div class="muted">NGÀY KẾT THÚC KẾ HOẠCH (trễ nhất)</div>
+          <div class="big" id="timelinePlanned" style="font-size:16px;font-weight:700;color:#374151">—</div>
+        </div>
+        <div class="muted" id="timelineCompare"></div>
+      </div>
+    </div>
+    <div id="stagesWrap"></div>
+    <div class="panel" style="display:flex;align-items:center;gap:12px">
+      <button class="primary" id="btnSave">Lưu thay đổi</button>
+      <span class="msg" id="saveMsg"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+var STATUS_OPTIONS = ["Chưa thực hiện", "Đang thực hiện", "Hoàn thành"];
+var currentCode = null;
+var currentUser = null;
+
+function api(url, opts) {
+  return fetch(url, Object.assign({headers:{"Content-Type":"application/json"}}, opts || {}))
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||"Lỗi"); return j; }); });
+}
+function pct(x){ return (Math.round((x||0)*1000)/10) + "%"; }
+function fmtDate(s){
+  if (!s) return "—";
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  return m ? (m[3] + "/" + m[2] + "/" + m[1]) : s;
+}
+function dateInputVal(s){ return s || ""; }
+
+function fillPicker(childItems, parentItems) {
+  var sel = document.getElementById("projectPicker");
+  sel.innerHTML = "";
+  if (!childItems.length && !parentItems.length) {
+    sel.innerHTML = "<option value=''>(Không có dự án nào bạn có thể xem/sửa)</option>";
+    return;
+  }
+  var placeholder = document.createElement("option");
+  placeholder.value = ""; placeholder.textContent = "— Chọn dự án —";
+  sel.appendChild(placeholder);
+
+  if (parentItems && parentItems.length) {
+    var og1 = document.createElement("optgroup");
+    og1.label = "Dự án TỔNG (xem thời gian hoàn thành gộp)";
+    parentItems.sort(function(a,b){ return a.code.localeCompare(b.code); }).forEach(function(p){
+      var opt = document.createElement("option");
+      opt.value = p.code; opt.dataset.kind = "parent";
+      opt.textContent = p.code + " — " + p.name;
+      og1.appendChild(opt);
+    });
+    sel.appendChild(og1);
+  }
+  var og2 = document.createElement("optgroup");
+  og2.label = "Dự án chi tiết (sửa từng công việc)";
+  childItems.sort(function(a,b){ return a.code.localeCompare(b.code); }).forEach(function(p){
+    var opt = document.createElement("option");
+    opt.value = p.code; opt.dataset.kind = "child";
+    opt.textContent = p.code + " — " + p.name;
+    og2.appendChild(opt);
+  });
+  sel.appendChild(og2);
+
+  var qsCode = new URLSearchParams(location.search).get("code");
+  if (qsCode) {
+    var match = Array.prototype.slice.call(sel.querySelectorAll("option")).filter(function(o){ return o.value === qsCode; })[0];
+    if (match) {
+      sel.value = qsCode;
+      loadSelection(qsCode, match.dataset.kind);
+    }
+  }
+}
+
+function loadProjectList(user) {
+  currentUser = user;
+  var msg = document.getElementById("pickerMsg");
+  if (user.role === "admin" || user.role === "manager") {
+    api("/api/projects-list-for-assignment").then(function(d){
+      var all = d.projects || [];
+      var children = all.filter(function(p){ return p.parent_code; }).map(function(p){ return {code: p.code, name: p.name}; });
+      var parents = all.filter(function(p){ return !p.parent_code; }).map(function(p){ return {code: p.code, name: p.name}; });
+      fillPicker(children, parents);
+    }).catch(function(e){ msg.className="msg err"; msg.textContent = e.message; });
+    return;
+  }
+  Promise.all([api("/api/bootstrap"), api("/api/auth/my-permissions")]).then(function(res){
+    var boot = res[0], perms = res[1];
+    var editable = {};
+    if (perms.full_access) {
+      Object.keys(perms.permissions||{}).forEach(function(c){ editable[c]=true; });
+    } else {
+      Object.keys(perms.permissions||{}).forEach(function(c){
+        var lvl = perms.permissions[c];
+        if (lvl === "UPDATE" || lvl === "MANAGE" || lvl === "FULL") editable[c] = true;
+      });
+    }
+    var items = [];
+    (boot.children||[]).forEach(function(c){
+      var code = c.detail && c.detail.header ? c.detail.header.child_code : null;
+      if (code && editable[code]) items.push({code: code, name: (c.detail.header.child_name || code)});
+    });
+    (boot.addedChildren||[]).forEach(function(c){
+      if (c.child_code && editable[c.child_code]) items.push({code: c.child_code, name: c.child_name || c.child_code});
+    });
+    if (!items.length) {
+      msg.className = "msg"; msg.textContent = "Bạn chưa được cấp quyền \"Cập nhật tiến độ\" trở lên trên dự án nào — liên hệ quản trị viên để được phân quyền (mục ⚙ Người dùng).";
+    }
+    fillPicker(items, []); // du an TONG chi hien voi admin/manager (xem gop toan bo)
+  }).catch(function(e){ msg.className="msg err"; msg.textContent = e.message; });
+}
+
+function statusBadgeLabel(status) {
+  if (status === "completed") return {cls:"ok", label:"Đã hoàn thành"};
+  if (status === "projected") return {cls:"warn", label:"Dự kiến"};
+  return {cls:"bad", label:"Chưa đủ dữ liệu"};
+}
+
+function renderRollup(data) {
+  document.getElementById("editArea").style.display = "none";
+  document.getElementById("rollupArea").style.display = "block";
+  document.getElementById("rollupCode").textContent = data.code;
+  var b = statusBadgeLabel(data.status);
+  var box = document.getElementById("rollupBox");
+  box.className = "totalBox " + (b.cls === "ok" ? "" : b.cls === "warn" ? "warn" : "bad");
+  document.getElementById("rollupStatus").textContent = b.label;
+  document.getElementById("rollupDate").textContent = fmtDate(data.completion_date);
+  document.getElementById("rollupCount").textContent =
+    data.completed_children + "/" + data.total_children + " dự án chi tiết đã hoàn thành 100%" +
+    (data.missing_data_children && data.missing_data_children.length
+      ? " · " + data.missing_data_children.length + " dự án chưa đủ dữ liệu ngày để dự báo (" + data.missing_data_children.join(", ") + ")"
+      : "");
+  var tbody = document.getElementById("rollupTbody");
+  tbody.innerHTML = "";
+  (data.children || []).forEach(function(c){
+    var bb = statusBadgeLabel(c.status);
+    var tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td><a href=\"?code=" + encodeURIComponent(c.code) + "\">" + c.code + "</a></td>" +
+      "<td><span class='badge " + bb.cls + "'>" + bb.label + "</span></td>" +
+      "<td>" + fmtDate(c.completion_date) + "</td>";
+    tbody.appendChild(tr);
+  });
+}
+
+function renderTimelineBox(timeline) {
+  var box = document.getElementById("timelineBox");
+  var note = document.getElementById("timelineNote");
+  var cmp = document.getElementById("timelineCompare");
+  document.getElementById("timelinePlanned").textContent = fmtDate(timeline && timeline.planned_completion_date);
+  if (!timeline) {
+    box.className = "totalBox bad";
+    document.getElementById("timelineStatus").textContent = "Chưa đủ dữ liệu";
+    document.getElementById("timelineDate").textContent = "—";
+    note.textContent = "";
+    cmp.textContent = "";
+    return;
+  }
+  var b = statusBadgeLabel(timeline.status);
+  box.className = "totalBox " + (b.cls === "ok" ? "" : b.cls === "warn" ? "warn" : "bad");
+  document.getElementById("timelineStatus").textContent = b.label;
+  document.getElementById("timelineDate").textContent = fmtDate(timeline.completion_date);
+  note.textContent = timeline.note || (timeline.status === "projected"
+    ? "Ngày dự kiến được ước tính từ tốc độ tiến độ hiện tại: (số ngày đã trôi qua từ Ngày bắt đầu) ÷ (% đã làm)."
+    : "");
+  cmp.textContent = "";
+  if (timeline.completion_date && timeline.planned_completion_date) {
+    var d1 = new Date(timeline.completion_date), d2 = new Date(timeline.planned_completion_date);
+    var diffDays = Math.round((d1 - d2) / 86400000);
+    if (diffDays > 0) cmp.textContent = "Trễ khoảng " + diffDays + " ngày so với kế hoạch.";
+    else if (diffDays < 0) cmp.textContent = "Sớm khoảng " + Math.abs(diffDays) + " ngày so với kế hoạch.";
+    else cmp.textContent = "Đúng theo kế hoạch.";
+  }
+}
+
+function renderStages(data) {
+  currentCode = data.code;
+  document.getElementById("rollupArea").style.display = "none";
+  document.getElementById("editArea").style.display = "block";
+  document.getElementById("savedTotal").textContent = "Lần lưu gần nhất: " + pct(data.overall_progress);
+  renderTimelineBox(data.timeline);
+  var wrap = document.getElementById("stagesWrap");
+  wrap.innerHTML = "";
+  data.stages.forEach(function(stage){
+    var box = document.createElement("div");
+    box.className = "panel";
+    var head = document.createElement("div");
+    head.className = "stageHead";
+    head.innerHTML = "<b>" + stage.stage_name + "</b><span>Trọng số giai đoạn: " + pct(stage.weight_pct) + " · Đang đạt: " + pct(stage.pct_of_package) + "</span>";
+    box.appendChild(head);
+
+    var tableWrap = document.createElement("div");
+    tableWrap.className = "tableWrap";
+    var table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>#</th><th>Công việc</th><th>Đơn vị</th><th>Trọng số</th><th>Trạng thái</th><th>% hoàn thành</th>" +
+      "<th>Ngày BĐ (KH)</th><th>Ngày KT (KH)</th><th>Ngày BĐ (TT)</th><th>Ngày KT (TT)</th></tr></thead>";
+    var tbody = document.createElement("tbody");
+    stage.tasks.forEach(function(t){
+      var tr = document.createElement("tr");
+      tr.dataset.id = t.id;
+
+      var tdStt = document.createElement("td"); tdStt.textContent = t.stt; tr.appendChild(tdStt);
+      var tdName = document.createElement("td"); tdName.className="taskname"; tdName.textContent = t.task_name; tr.appendChild(tdName);
+      var tdUnit = document.createElement("td"); tdUnit.className="muted"; tdUnit.textContent = t.unit || "—"; tr.appendChild(tdUnit);
+      var tdW = document.createElement("td"); tdW.className="wpct"; tdW.textContent = pct(t.weight_pct); tr.appendChild(tdW);
+
+      var tdStatus = document.createElement("td");
+      var selStatus = document.createElement("select");
+      STATUS_OPTIONS.forEach(function(s){
+        var o = document.createElement("option"); o.value = s; o.textContent = s;
+        if (s === t.status) o.selected = true;
+        selStatus.appendChild(o);
+      });
+      tdStatus.appendChild(selStatus); tr.appendChild(tdStatus);
+
+      var tdPct = document.createElement("td");
+      var inp = document.createElement("input");
+      inp.type = "number"; inp.min = 0; inp.max = 100; inp.step = 1;
+      inp.value = Math.round((t.pct_done||0)*100);
+      inp.dataset.weight = t.weight_pct;
+      tdPct.appendChild(inp);
+      tdPct.appendChild(document.createTextNode(" %"));
+      tr.appendChild(tdPct);
+
+      function dateCell(fieldName, value) {
+        var td = document.createElement("td");
+        var d = document.createElement("input");
+        d.type = "date";
+        d.value = dateInputVal(value);
+        d.dataset.field = fieldName;
+        d.addEventListener("change", function(){ tr.classList.add("rowUnsaved"); });
+        td.appendChild(d);
+        return td;
+      }
+      tr.appendChild(dateCell("planned_start", t.planned_start));
+      tr.appendChild(dateCell("planned_end", t.planned_end));
+      tr.appendChild(dateCell("actual_start", t.actual_start));
+      tr.appendChild(dateCell("actual_end", t.actual_end));
+
+      selStatus.addEventListener("change", function(){
+        if (selStatus.value === "Hoàn thành" && Number(inp.value) < 100) inp.value = 100;
+        if (selStatus.value === "Chưa thực hiện" && Number(inp.value) > 0) inp.value = 0;
+        tr.classList.add("rowUnsaved");
+        recomputeLiveTotal();
+      });
+      inp.addEventListener("input", function(){
+        var v = Number(inp.value);
+        if (v >= 100) selStatus.value = "Hoàn thành";
+        else if (v <= 0) selStatus.value = "Chưa thực hiện";
+        else selStatus.value = "Đang thực hiện";
+        tr.classList.add("rowUnsaved");
+        recomputeLiveTotal();
+      });
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    box.appendChild(tableWrap);
+    wrap.appendChild(box);
+  });
+  recomputeLiveTotal();
+}
+
+function recomputeLiveTotal() {
+  var rows = document.querySelectorAll("#stagesWrap tbody tr");
+  var sum = 0;
+  rows.forEach(function(tr){
+    var inp = tr.querySelector("input[type=number]");
+    var w = Number(inp.dataset.weight) || 0;
+    var v = Math.max(0, Math.min(100, Number(inp.value) || 0)) / 100;
+    sum += w * v;
+  });
+  document.getElementById("liveTotal").textContent = (Math.round(sum*1000)/10) + "%";
+}
+
+function loadSelection(code, kind) {
+  var msg = document.getElementById("pickerMsg");
+  msg.className = "msg"; msg.textContent = "Đang tải...";
+  document.getElementById("editArea").style.display = "none";
+  document.getElementById("rollupArea").style.display = "none";
+  if (kind === "parent") {
+    api("/api/projects/" + encodeURIComponent(code) + "/timeline").then(function(d){
+      msg.textContent = "";
+      renderRollup(d);
+      history.replaceState(null, "", "?code=" + encodeURIComponent(code));
+    }).catch(function(e){ msg.className = "msg err"; msg.textContent = e.message; });
+    return;
+  }
+  api("/api/projects/" + encodeURIComponent(code) + "/progress-tasks").then(function(d){
+    msg.textContent = "";
+    renderStages(d);
+    history.replaceState(null, "", "?code=" + encodeURIComponent(code));
+  }).catch(function(e){
+    msg.className = "msg err"; msg.textContent = e.message;
+  });
+}
+
+document.getElementById("btnLoad").addEventListener("click", function(){
+  var sel = document.getElementById("projectPicker");
+  var code = sel.value;
+  if (!code) return;
+  var opt = sel.options[sel.selectedIndex];
+  loadSelection(code, opt ? opt.dataset.kind : "child");
+});
+document.getElementById("projectPicker").addEventListener("change", function(){
+  if (this.value) {
+    var opt = this.options[this.selectedIndex];
+    loadSelection(this.value, opt ? opt.dataset.kind : "child");
+  }
+});
+
+document.getElementById("btnSave").addEventListener("click", function(){
+  var rows = document.querySelectorAll("#stagesWrap tbody tr");
+  var tasks = [];
+  rows.forEach(function(tr){
+    var sel = tr.querySelector("select");
+    var inp = tr.querySelector("input[type=number]");
+    var item = { id: Number(tr.dataset.id), status: sel.value, pct_done: Math.max(0, Math.min(100, Number(inp.value)||0)) / 100 };
+    tr.querySelectorAll("input[type=date]").forEach(function(d){ item[d.dataset.field] = d.value || null; });
+    tasks.push(item);
+  });
+  var msg = document.getElementById("saveMsg");
+  msg.className = "msg"; msg.textContent = "Đang lưu...";
+  var btn = document.getElementById("btnSave");
+  btn.disabled = true;
+  api("/api/projects/" + encodeURIComponent(currentCode) + "/progress-tasks", {method:"PUT", body: JSON.stringify({tasks: tasks})})
+    .then(function(d){
+      msg.className = "msg ok"; msg.textContent = "Đã lưu — % hoàn thành dự án hiện tại: " + pct(d.progress) + ".";
+      document.getElementById("savedTotal").textContent = "Lần lưu gần nhất: " + pct(d.progress);
+      renderTimelineBox(d.timeline);
+      document.querySelectorAll("#stagesWrap tbody tr").forEach(function(tr){ tr.classList.remove("rowUnsaved"); });
+      btn.disabled = false;
+    })
+    .catch(function(e){
+      msg.className = "msg err"; msg.textContent = e.message;
+      btn.disabled = false;
+    });
+});
+
+api("/api/auth/me").then(function(d){
+  if (!d.user) { location.href = "/"; return; }
+  loadProjectList(d.user);
+}).catch(function(){ location.href = "/"; });
+</script>
+</body>
+</html>
