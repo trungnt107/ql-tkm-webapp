@@ -36,6 +36,7 @@ const PORT = process.env.PORT || 3000;
 const IS_PROD = !!(process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production");
 const PUBLIC_HTML = path.join(__dirname, "public_index.html");
 const ADMIN_HTML = path.join(__dirname, "admin-users.html");
+const PROGRESS_HTML = path.join(__dirname, "progress-tasks.html");
 const SEED_META = JSON.parse(fs.readFileSync(path.join(__dirname, "data", "seed_data.json"), "utf8"));
 
 const app = express();
@@ -313,7 +314,8 @@ function getCategories() {
   }
   return cats;
 }
-function taskRowsFor(code) {  return db
+function taskRowsFor(code) {
+  return db
     .prepare("SELECT * FROM project_tasks WHERE project_code = ? ORDER BY sort_order, id")
     .all(code)
     .map((t) => ({
@@ -325,6 +327,188 @@ function taskRowsFor(code) {  return db
       status: t.status,
       note: t.note,
     }));
+}
+// ---------------------------------------------------------------------------
+// Bang tien do CHI TIET (WBS) - "bang tien do chi tiet" theo tung dau muc
+// cong viec, co san tu file Excel goc (4 giai doan). % hoan thanh CHUNG cua
+// ca du an = tong (weight_pct * pct_done) tren TOAN BO cac dong cua du an
+// do (khong phai chi trong 1 giai doan) - dung boi ca 2 noi: hien thi lai
+// cho dung o tab "Tien do" (xem buildBootstrap) va tinh lai cot progress
+// trong bang projects moi khi co dong duoc sua (xem PUT .../progress-tasks).
+// ---------------------------------------------------------------------------
+function progressBreakdownRowsFor(code) {
+  return db
+    .prepare("SELECT * FROM project_progress_tasks WHERE project_code = ? ORDER BY stage_no, stt")
+    .all(code);
+}
+function computeProgressFromBreakdown(code) {
+  const rows = progressBreakdownRowsFor(code);
+  if (!rows.length) return null; // du an nay chua co bang WBS (vd du an tu tao qua form) -> giu co che cu
+  let sum = 0;
+  rows.forEach((r) => (sum += (r.weight_pct || 0) * (r.pct_done || 0)));
+  return Math.max(0, Math.min(1, sum));
+}
+// ---------------------------------------------------------------------------
+// Du bao "thoi gian hoan thanh" cua 1 du an chi tiet tu bang tien do chi tiet
+// (WBS) - theo lua chon cua nguoi dung:
+//  - Da hoan thanh 100%: lay Ngay ket thuc THUC TE (actual_end) muon nhat
+//    trong cac dong lam "Ngay hoan thanh du an".
+//  - Chua hoan thanh 100%: DU KIEN ngay hoan thanh = ngoai suy tu TOC DO tien
+//    do hien tai, tinh tu Ngay bat dau tham chieu (uu tien Ngay bat dau THUC
+//    TE som nhat da nhap; neu chua co thi lay Ngay bat dau KE HOACH som
+//    nhat): so ngay da trai qua / % da lam = tong so ngay can, cong vao Ngay
+//    bat dau tham chieu ra Ngay du kien hoan thanh.
+//  - Ngoai ra van tra ve them Ngay ket thuc KE HOACH tre nhat (planned_end)
+//    de nguoi dung tu so sanh som/dung han/tre han voi ngay du kien/thuc te.
+// ---------------------------------------------------------------------------
+function computeTimelineForCode(code) {
+  const rows = progressBreakdownRowsFor(code);
+  if (!rows.length) return null;
+  const overall_progress = computeProgressFromBreakdown(code) || 0;
+  const plannedStarts = rows.map((r) => r.planned_start).filter(Boolean).sort();
+  const plannedEnds = rows.map((r) => r.planned_end).filter(Boolean).sort();
+  const actualStarts = rows.map((r) => r.actual_start).filter(Boolean).sort();
+  const actualEnds = rows.map((r) => r.actual_end).filter(Boolean).sort();
+  const referenceStart = actualStarts[0] || plannedStarts[0] || null;
+  const plannedCompletionDate = plannedEnds.length ? plannedEnds[plannedEnds.length - 1] : null;
+  const base = { overall_progress, reference_start_date: referenceStart, planned_completion_date: plannedCompletionDate };
+
+  if (overall_progress >= 0.999) {
+    const doneDate = actualEnds.length ? actualEnds[actualEnds.length - 1] : null;
+    return Object.assign({}, base, {
+      status: "completed",
+      completion_date: doneDate,
+      note: doneDate ? null : "Đã đạt 100% nhưng chưa nhập đủ Ngày kết thúc thực tế cho các công việc.",
+    });
+  }
+  if (!referenceStart) {
+    return Object.assign({}, base, {
+      status: "insufficient_data",
+      completion_date: null,
+      note: "Chưa nhập Ngày bắt đầu (kế hoạch hoặc thực tế) cho công việc nào để dự báo.",
+    });
+  }
+  if (overall_progress <= 0) {
+    return Object.assign({}, base, {
+      status: "insufficient_data",
+      completion_date: null,
+      note: "Chưa có khối lượng hoàn thành nào để tính tốc độ tiến độ.",
+    });
+  }
+  const startMs = Date.parse(referenceStart + "T00:00:00Z");
+  if (Number.isNaN(startMs)) {
+    return Object.assign({}, base, { status: "insufficient_data", completion_date: null, note: "Ngày bắt đầu không hợp lệ." });
+  }
+  const elapsedDays = (Date.now() - startMs) / 86400000;
+  if (elapsedDays <= 0) {
+    return Object.assign({}, base, {
+      status: "insufficient_data",
+      completion_date: null,
+      note: "Ngày bắt đầu đang ở tương lai so với hôm nay.",
+    });
+  }
+  const totalDaysNeeded = elapsedDays / overall_progress;
+  const projDate = new Date(startMs + totalDaysNeeded * 86400000).toISOString().slice(0, 10);
+  return Object.assign({}, base, { status: "projected", completion_date: projDate, note: null });
+}
+// Gop "thoi gian hoan thanh" len cap DU AN TONG (cha): theo lua chon cua
+// nguoi dung, du an TONG duoc coi la hoan thanh khi TAT CA du an chi tiet
+// (con) cua no hoan thanh 100% -> Ngay hoan thanh cua du an TONG = ngay hoan
+// thanh (thuc te hoac du kien) MUON NHAT trong so cac du an con.
+function computeParentTimeline(parentCode) {
+  const children = db
+    .prepare("SELECT code FROM projects WHERE parent_code = ? AND deleted_at IS NULL AND source = 'excel'")
+    .all(parentCode);
+  const items = children
+    .map((c) => ({ code: c.code, timeline: computeTimelineForCode(c.code) }))
+    .filter((x) => x.timeline);
+  if (!items.length) return null;
+  const allCompleted = items.every((x) => x.timeline.status === "completed");
+  const missing = items.filter((x) => x.timeline.status === "insufficient_data").map((x) => x.code);
+  const dated = items.filter((x) => x.timeline.completion_date);
+  const completion_date = dated.length
+    ? dated.map((x) => x.timeline.completion_date).sort().slice(-1)[0]
+    : null;
+  return {
+    status: allCompleted ? "completed" : dated.length ? "projected" : "insufficient_data",
+    completion_date,
+    total_children: items.length,
+    completed_children: items.filter((x) => x.timeline.status === "completed").length,
+    missing_data_children: missing,
+    children: items.map((x) => ({ code: x.code, status: x.timeline.status, completion_date: x.timeline.completion_date })),
+  };
+}
+function progressBreakdownGrouped(code) {
+  const rows = progressBreakdownRowsFor(code);
+  const stagesMap = new Map();
+  rows.forEach((r) => {
+    if (!stagesMap.has(r.stage_no)) {
+      stagesMap.set(r.stage_no, { stage_no: r.stage_no, stage_name: r.stage_name, weight_pct: 0, pct_of_package: 0, tasks: [] });
+    }
+    const stage = stagesMap.get(r.stage_no);
+    stage.weight_pct += r.weight_pct || 0;
+    stage.pct_of_package += (r.weight_pct || 0) * (r.pct_done || 0);
+    stage.tasks.push({
+      id: r.id,
+      stt: r.stt,
+      task_name: r.task_name,
+      unit: r.unit,
+      weight_pct: r.weight_pct,
+      status: r.status,
+      pct_done: r.pct_done,
+      pct_of_package: (r.weight_pct || 0) * (r.pct_done || 0),
+      planned_start: r.planned_start,
+      planned_end: r.planned_end,
+      actual_start: r.actual_start,
+      actual_end: r.actual_end,
+      note: r.note,
+    });
+  });
+  const stages = Array.from(stagesMap.values()).sort((a, b) => a.stage_no - b.stage_no);
+  let overall = 0;
+  stages.forEach((s) => (overall += s.pct_of_package));
+  return { stages, overall_progress: Math.max(0, Math.min(1, overall)) };
+}
+// Ghi de "detail.stages" + "progress"/"stageN_pct" cua 1 rawChild (doc thang
+// tu raw_excel_json, von la ban chup dong bang tu Excel, khong bao gio tu
+// thay doi) bang du lieu SONG hien tai trong bang project_progress_tasks, de
+// tab "Tien do" tren giao dien luon hien dung so moi nhat sau khi ai do sua
+// qua trang "Sua tien do chi tiet" - khong can dung/sua gi ben trong file
+// public_index.html (ma React da dong goi san).
+function applyLiveProgressBreakdown(rawChild, code) {
+  const rows = progressBreakdownRowsFor(code);
+  if (!rows.length) return rawChild; // du an nay chua co WBS -> giu nguyen nhu cu
+  const { stages, overall_progress } = progressBreakdownGrouped(code);
+  if (rawChild.detail && Array.isArray(rawChild.detail.stages)) {
+    rawChild.detail.stages = stages.map((s) => ({
+      stage_name: s.stage_name,
+      weight_pct: s.weight_pct,
+      pct_of_package: s.pct_of_package,
+      tasks: s.tasks.map((t) => ({
+        stt: t.stt,
+        task_name: t.task_name,
+        unit: t.unit,
+        weight_pct: t.weight_pct,
+        status: t.status,
+        pct_done: t.pct_done,
+        pct_of_package: t.pct_of_package,
+        planned_start: t.planned_start,
+        planned_end: t.planned_end,
+        planned_actual: null,
+        actual_start: t.actual_start,
+        actual_end: t.actual_end,
+        actual_actual: null,
+        evaluation: null,
+        documents: null,
+        description: t.note,
+      })),
+    }));
+  }
+  rawChild.progress = overall_progress;
+  stages.forEach((s, idx) => {
+    rawChild["stage" + (idx + 1) + "_pct"] = s.weight_pct > 0 ? s.pct_of_package / s.weight_pct : 0;
+  });
+  return rawChild;
 }
 function rowToOverride(row) {
   return {
@@ -396,7 +580,8 @@ function buildBootstrap(user) {
       }
     } else {
       if (r.source === "excel") {
-        const rawChild = JSON.parse(r.raw_excel_json);
+        let rawChild = JSON.parse(r.raw_excel_json);
+        rawChild = applyLiveProgressBreakdown(rawChild, r.code);
         rawChild._version = r.version;
         children.push(rawChild);
         if (r.version > 1) {
@@ -650,7 +835,8 @@ function replaceMaterials(code, materials, userName) {
     ins.run(
       code, mt.material_code || null, mt.material_name || "", mt.unit || null,
       mt.planned_qty === "" || mt.planned_qty == null ? null : Number(mt.planned_qty),
-      mt.received_qty === "" || mt.received_qty == null ? null : Number(mt.received_qty),      mt.used_qty === "" || mt.used_qty == null ? null : Number(mt.used_qty),
+      mt.received_qty === "" || mt.received_qty == null ? null : Number(mt.received_qty),
+      mt.used_qty === "" || mt.used_qty == null ? null : Number(mt.used_qty),
       mt.note || null, now(), userName
     );
   });
@@ -704,7 +890,6 @@ app.post("/api/projects", requireRole("admin", "manager"), (req, res) => {
     err(res, 500, "Tạo dự án thất bại: " + e.message);
   }
 });
-
 // Cac truong "quan trong" cua du an - chi sua duoc khi la admin/manager hoac
 // duoc cap quyen MANAGE/FULL tren du an do. Muc UPDATE chi duoc dong vao tien
 // do/trang thai/cac truong con lai (xem applyPermissionTierToFields).
@@ -751,6 +936,14 @@ app.put("/api/projects/:code", requireAuth, (req, res) => {
       return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
     }
     const f = applyPermissionTierToFields(payloadToFields(payload), row, tier);
+    // Neu du an nay da co "bang tien do chi tiet" (WBS, xem mo ta o
+    // computeProgressFromBreakdown), % hoan thanh PHAI luon duoc tinh tu
+    // bang do - bo qua gia tri "% hoan thanh" ma form chinh sua chung (thanh
+    // truot cu) gui len, de tranh 2 noi cung sua 1 con so gay lech nhau.
+    // Muon doi tien do cho du an loai nay, dung API
+    // PUT /api/projects/:code/progress-tasks (trang "Sua tien do chi tiet").
+    const breakdownProgress = computeProgressFromBreakdown(code);
+    if (breakdownProgress != null) f.progress = breakdownProgress;
     const info = db
       .prepare(
         `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
@@ -869,6 +1062,118 @@ app.get("/api/projects/:code/history", requireAuth, (req, res) => {
   res.json({ history: rows });
 });
 
+// ---------------------------------------------------------------------------
+// Bang tien do CHI TIET (WBS) cua 1 du an chi tiet - xem/sua tung dau muc
+// cong viec (4 giai doan) de he thong tu tinh lai % hoan thanh chung, thay
+// vi phai keo tay thanh truot "% hoan thanh" nhu truoc. Quyen sua: giong het
+// quyen "Cap nhat tien do" (UPDATE) tro len - dung nhu ten muc quyen do.
+// ---------------------------------------------------------------------------
+app.get("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT code FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem dự án này.");
+  }
+  const { stages, overall_progress } = progressBreakdownGrouped(code);
+  if (!stages.length) {
+    return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết (chỉ áp dụng cho dự án chi tiết lấy từ Excel gốc).");
+  }
+  res.json({ code, stages, overall_progress, timeline: computeTimelineForCode(code) });
+});
+
+app.put("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canUpdateProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền cập nhật tiến độ dự án này.");
+  }
+  const items = Array.isArray(req.body && req.body.tasks) ? req.body.tasks : null;
+  if (!items || !items.length) return err(res, 400, 'Dữ liệu không hợp lệ - cần một mảng "tasks": [{ id, status, pct_done }].');
+
+  // Ngay thang: chi nhan dinh dang "YYYY-MM-DD" (input type=date) hoac rong
+  // (= xoa ngay). Gia tri sai dinh dang -> tra ve loi (khong am tham bo qua),
+  // de nguoi dung biet ma sua lai.
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  function normDate(v) {
+    if (v === undefined || v === null || v === "") return null;
+    const s = String(v).trim();
+    return DATE_RE.test(s) ? s : false;
+  }
+
+  const upd = db.prepare(
+    `UPDATE project_progress_tasks
+       SET status = ?, pct_done = ?, planned_start = ?, planned_end = ?, actual_start = ?, actual_end = ?, updated_at = ?
+       WHERE id = ? AND project_code = ?`
+  );
+  const ts = now();
+  db.exec("BEGIN");
+  try {
+    for (const it of items) {
+      const id = Number(it.id);
+      let pct = Number(it.pct_done);
+      if (!id || Number.isNaN(pct)) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Dữ liệu không hợp lệ cho dòng id=${it.id}.`);
+      }
+      pct = Math.max(0, Math.min(1, pct));
+      const status = String(it.status || (pct >= 1 ? "Hoàn thành" : pct > 0 ? "Đang thực hiện" : "Chưa thực hiện"));
+      const planned_start = normDate(it.planned_start);
+      const planned_end = normDate(it.planned_end);
+      const actual_start = normDate(it.actual_start);
+      const actual_end = normDate(it.actual_end);
+      if (planned_start === false || planned_end === false || actual_start === false || actual_end === false) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Ngày không hợp lệ ở dòng id=${id} (định dạng phải là YYYY-MM-DD).`);
+      }
+      const info = upd.run(status, pct, planned_start, planned_end, actual_start, actual_end, ts, id, code);
+      if (info.changes === 0) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Không tìm thấy dòng tiến độ id=${id} thuộc dự án "${code}".`);
+      }
+    }
+    const newProgress = computeProgressFromBreakdown(code);
+    if (newProgress != null) {
+      const info = db
+        .prepare("UPDATE projects SET progress = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE code = ? AND version = ?")
+        .run(newProgress, ts, req.user.display_name, code, row.version);
+      if (info.changes === 0) {
+        db.exec("ROLLBACK");
+        return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+      }
+    }
+    db.exec("COMMIT");
+    logHistory(code, req.user.display_name, "update", row, { progress: newProgress });
+    broadcastChange({ code, action: "update", by: req.user.display_name });
+    res.json({ ok: true, code, progress: newProgress, timeline: computeTimelineForCode(code) });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    err(res, 500, "Cập nhật tiến độ chi tiết thất bại: " + (IS_PROD ? "Đã có lỗi ở máy chủ." : e.message));
+  }
+});
+
+// Thoi gian hoan thanh: dung chung cho ca DU AN CHI TIET (tinh tu bang WBS
+// cua chinh no) lan DU AN TONG (gop tu tat ca du an con - xem
+// computeParentTimeline). Chi can 1 endpoint, FE tu hien thi khac nhau theo
+// "is_parent".
+app.get("/api/projects/:code/timeline", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem dự án này.");
+  }
+  if (!row.parent_code) {
+    const rollup = computeParentTimeline(code);
+    if (!rollup) return err(res, 404, "Dự án tổng này chưa có dự án chi tiết nào có bảng tiến độ chi tiết.");
+    return res.json(Object.assign({ code, is_parent: true }, rollup));
+  }
+  const timeline = computeTimelineForCode(code);
+  if (!timeline) return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết.");
+  res.json(Object.assign({ code, is_parent: false }, timeline));
+});
+
 app.post("/api/import/preview", requireAuth, (req, res) => {
   err(res, 501, "Chức năng Nhập từ Excel chưa được hỗ trợ ở bản này. Vui lòng thêm/sửa từng dự án bằng form.");
 });
@@ -884,6 +1189,9 @@ app.get("/api/export", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/admin-users.html", requireRole("admin"), (req, res) => {
   res.sendFile(ADMIN_HTML);
+});
+app.get("/progress-tasks.html", requireAuth, (req, res) => {
+  res.sendFile(PROGRESS_HTML);
 });
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(PUBLIC_HTML);
