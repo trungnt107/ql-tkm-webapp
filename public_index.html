@@ -212,13 +212,19 @@
   // RBAC tren giao dien: an/khoa nut theo vai tro (server van tu kiem tra
   // quyen o moi API - day chi la lop giao dien cho gon, khong phai lop bao mat).
   // ---------------------------------------------------------------------
+  // Muc quyen chi tiet theo tung du an (VIEW/UPDATE/MANAGE/FULL), chi ap dung
+  // cho role 'responsible'/'viewer'. admin/manager luon coi nhu FULL moi noi.
+  function projectPermissionLevel(code) {
+    if (!CURRENT_USER) return null;
+    if (CURRENT_USER.role === "admin" || CURRENT_USER.role === "manager") return "FULL";
+    if (!code || !CURRENT_USER.permissions) return null;
+    return CURRENT_USER.permissions[code] || null;
+  }
+
   function applyRoleUI() {
     if (!CURRENT_USER) return;
     var role = CURRENT_USER.role;
     var canCreate = role === "admin" || role === "manager";
-    var canDeleteClone = role === "admin" || role === "manager";
-    var canEditAny = role === "admin" || role === "manager";
-    var assigned = CURRENT_USER.assigned_codes || null; // chi co voi role 'responsible'
 
     document.querySelectorAll("button").forEach(function (btn) {
       var t = (btn.textContent || "").trim();
@@ -231,6 +237,7 @@
         }
       }
     });
+    scanDetailHeader();
   }
 
   // Quan sat menu "⋮" (Xem chi tiết / Chỉnh sửa / Nhân bản dự án) moi khi no
@@ -239,12 +246,17 @@
     if (!CURRENT_USER || menu.__qltkmPatched) return;
     menu.__qltkmPatched = true;
     var role = CURRENT_USER.role;
-    var canDeleteClone = role === "admin" || role === "manager";
+    var isFullRole = role === "admin" || role === "manager";
+    var canClone = isFullRole; // tao du an moi van chi danh cho admin/manager
 
     // Tim ma du an chi tiet tu hang <tr> gan nhat chua menu nay
     var tr = menu.closest("tr");
     var code = null;
     if (tr && tr.firstElementChild) code = (tr.firstElementChild.textContent || "").trim();
+
+    var level = projectPermissionLevel(code); // FULL neu admin/manager, hoac VIEW/UPDATE/MANAGE/FULL/null
+    var canEditThis = isFullRole || level === "UPDATE" || level === "MANAGE" || level === "FULL";
+    var canDeleteThis = isFullRole || level === "FULL";
 
     var buttons = Array.prototype.slice.call(menu.querySelectorAll("button"));
     var editBtn = buttons.find(function (b) {
@@ -254,25 +266,22 @@
       return (b.textContent || "").trim() === "Nhân bản dự án";
     });
 
-    if (editBtn) {
-      var canEditThis =
-        role === "admin" ||
-        role === "manager" ||
-        (role === "responsible" && code && CURRENT_USER.assigned_codes && CURRENT_USER.assigned_codes.indexOf(code) !== -1);
-      if (!canEditThis) {
-        editBtn.disabled = true;
-        editBtn.style.opacity = "0.4";
-        editBtn.style.cursor = "not-allowed";
-        editBtn.title = role === "viewer" ? "Tài khoản chỉ xem, không có quyền sửa." : "Bạn chưa được phân công dự án này.";
-      }
+    if (editBtn && !canEditThis) {
+      editBtn.disabled = true;
+      editBtn.style.opacity = "0.4";
+      editBtn.style.cursor = "not-allowed";
+      editBtn.title =
+        level === "VIEW"
+          ? "Bạn chỉ được cấp quyền xem dự án này, không được sửa."
+          : "Bạn chưa được phân quyền trên dự án này.";
     }
-    if (cloneBtn && !canDeleteClone) {
+    if (cloneBtn && !canClone) {
       cloneBtn.disabled = true;
       cloneBtn.style.opacity = "0.4";
       cloneBtn.style.cursor = "not-allowed";
       cloneBtn.title = "Vai trò của bạn không có quyền nhân bản dự án.";
     }
-    if (canDeleteClone && code) {
+    if (canDeleteThis && code) {
       var delBtn = document.createElement("button");
       delBtn.textContent = "🗑 Xóa dự án";
       delBtn.style.cssText =
@@ -296,6 +305,45 @@
           });
       });
       menu.appendChild(delBtn);
+    }
+  }
+
+  // Chen them nut "📈 Tiến độ chi tiết" canh nut "✎ Chỉnh sửa" / "⧉ Nhân bản"
+  // o dau trang CHI TIET du an, tro sang trang rieng "Sua tien do chi tiet"
+  // (progress-tasks.html) de nhap ngay + tinh % hoan thanh tu bang WBS -
+  // khong sua gi ben trong bundle React da dong goi, chi chen them 1 the <a>.
+  function patchDetailHeader(row) {
+    var m = /^#\/projects\/[^/]+\/([^/?#]+)/.exec(location.hash);
+    var code = m ? decodeURIComponent(m[1]) : null;
+    var existing = row.querySelector("a[data-qltkm-progress-link]");
+    if (!code) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) {
+      if (existing.getAttribute("data-qltkm-progress-link") === code) return; // da dung, bo qua
+      existing.remove();
+    }
+    var level = projectPermissionLevel(code);
+    if (!level) return; // khong duoc cap quyen tren du an nay -> khong hien link
+    var link = document.createElement("a");
+    link.textContent = "📈 Tiến độ chi tiết";
+    link.href = "/progress-tasks.html?code=" + encodeURIComponent(code);
+    link.className = "back-btn";
+    link.setAttribute("data-qltkm-progress-link", code);
+    link.style.textDecoration = "none";
+    link.style.display = "inline-flex";
+    link.style.alignItems = "center";
+    row.appendChild(link);
+  }
+  function scanDetailHeader() {
+    if (!CURRENT_USER) return;
+    var btns = document.querySelectorAll("button.back-btn");
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || "").trim() === "✎ Chỉnh sửa" && btns[i].parentElement) {
+        patchDetailHeader(btns[i].parentElement);
+        break;
+      }
     }
   }
 
@@ -330,16 +378,16 @@
           return;
         }
         CURRENT_USER = data.user;
-        if (CURRENT_USER.role === "responsible") {
-          realFetch("/api/auth/my-assignments")
+        if (CURRENT_USER.role === "responsible" || CURRENT_USER.role === "viewer") {
+          realFetch("/api/auth/my-permissions")
             .then(function (r) {
-              return r.ok ? r.json() : { project_codes: [] };
+              return r.ok ? r.json() : { permissions: {} };
             })
             .catch(function () {
-              return { project_codes: [] };
+              return { permissions: {} };
             })
             .then(function (m) {
-              CURRENT_USER.assigned_codes = m.project_codes || [];
+              CURRENT_USER.permissions = m.permissions || {};
               finishBoot();
             });
         } else {
@@ -358,6 +406,9 @@
     mo.observe(document.body, { childList: true, subtree: true });
     applyRoleUI();
     setInterval(applyRoleUI, 1500); // du phong cho cac lan render lai cua React
+    window.addEventListener("hashchange", function () {
+      setTimeout(scanDetailHeader, 50); // cho React render xong trang du an moi
+    });
   }
 
   if (document.readyState === "loading") {
@@ -366,7 +417,6 @@
     boot();
   }
 })();
-
 </script>
 <script type="module" crossorigin>function CH(n,t){for(var l=0;l<t.length;l++){const a=t[l];if(typeof a!="string"&&!Array.isArray(a)){for(const e in a)if(e!=="default"&&!(e in n)){const u=Object.getOwnPropertyDescriptor(a,e);u&&Object.defineProperty(n,e,u.get?u:{enumerable:!0,get:()=>a[e]})}}}return Object.freeze(Object.defineProperty(n,Symbol.toStringTag,{value:"Module"}))}(function(){const t=document.createElement("link").relList;if(t&&t.supports&&t.supports("modulepreload"))return;for(const e of document.querySelectorAll('link[rel="modulepreload"]'))a(e);new MutationObserver(e=>{for(const u of e)if(u.type==="childList")for(const c of u.addedNodes)c.tagName==="LINK"&&c.rel==="modulepreload"&&a(c)}).observe(document,{childList:!0,subtree:!0});function l(e){const u={};return e.integrity&&(u.integrity=e.integrity),e.referrerPolicy&&(u.referrerPolicy=e.referrerPolicy),e.crossOrigin==="use-credentials"?u.credentials="include":e.crossOrigin==="anonymous"?u.credentials="omit":u.credentials="same-origin",u}function a(e){if(e.ep)return;e.ep=!0;const u=l(e);fetch(e.href,u)}})();var d_=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof global<"u"?global:typeof self<"u"?self:{};function fn(n){return n&&n.__esModule&&Object.prototype.hasOwnProperty.call(n,"default")?n.default:n}var ly={exports:{}},Bo={},ay={exports:{}},cn={};/**
  * @license React
