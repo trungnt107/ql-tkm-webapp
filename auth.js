@@ -76,7 +76,7 @@ function requireRole() {
   return function (req, res, next) {
     if (!req.user) return res.status(401).json({ error: "Chưa đăng nhập." });
     if (!allowed.includes(req.user.role)) {
-      return res.status(403).json({ error: "Bạn không có quyền thực hiện thao tác này." });
+      return res.status(403).json({ error: "Bạn không có quyền thực hiện thao tác này.", success: false, code: "FORBIDDEN" });
     }
     next();
   };
@@ -148,6 +148,72 @@ function visibleProjectCodesFor(user) {
   return rows.map((r) => r.project_code);
 }
 
+// ---------------------------------------------------------------------------
+// Giai doan 1 - Phan quyen chi tiet theo TUNG CONG VIEC/TASK ben trong 1 du
+// an (bang user_task_permissions - xem chu thich trong db.js). Day la lop
+// GIOI HAN THEM tren nen quyen du an da co o tren: KHONG anh huong gi neu
+// admin chua tung gioi han task cho ai (hanh vi giu nguyen 100% nhu truoc -
+// ai co UPDATE/MANAGE/FULL tren du an van sua duoc MOI task nhu cu).
+// ---------------------------------------------------------------------------
+function getUserTaskPermissionRows(userId, projectCode) {
+  return db
+    .prepare("SELECT task_id, permission_level FROM user_task_permissions WHERE user_id = ? AND project_code = ?")
+    .all(userId, projectCode);
+}
+// Tra ve muc quyen HIEU LUC (VIEW/UPDATE/MANAGE/FULL) cua user tren 1 task cu
+// the, hoac null neu khong duoc thay task (khong du quyen tren ca du an).
+// Logic:
+//  - admin/manager: luon FULL.
+//  - Khong co quyen gi tren du an (getProjectPermission null): null.
+//  - Du an chi co VIEW: task cung chi VIEW (pham vi task khong lien quan).
+//  - Du an co UPDATE/MANAGE/FULL nhung CHUA tung bi gioi han task nao (khong
+//    co dong nao trong user_task_permissions cho cap user+project nay): tra
+//    nguyen muc quyen du an cho MOI task - dung hanh vi dang chay truoc day.
+//  - Da bi gioi han (co it nhat 1 dong): task KHONG nam trong danh sach ->
+//    chi VIEW; task CO trong danh sach -> muc quyen cua dong do, nhung KHONG
+//    DUOC VUOT qua muc quyen du an hien tai (phong truong hop du lieu cu con
+//    sot lai sau khi admin ha quyen du an - luon lay muc THAP HON giua 2 ben).
+function getEffectiveTaskPermission(user, projectCode, taskId) {
+  if (!user) return null;
+  if (user.role === "admin" || user.role === "manager") return "FULL";
+  const projectLevel = getProjectPermission(user, projectCode);
+  if (!projectLevel) return null;
+  if (projectLevel === "VIEW") return "VIEW";
+  const rows = getUserTaskPermissionRows(user.id, projectCode);
+  if (!rows.length) return projectLevel;
+  const row = rows.find((r) => r.task_id === taskId);
+  if (!row) return "VIEW";
+  return PERMISSION_RANK[row.permission_level] <= PERMISSION_RANK[projectLevel] ? row.permission_level : projectLevel;
+}
+function canViewTask(user, projectCode, taskId) {
+  return !!getEffectiveTaskPermission(user, projectCode, taskId);
+}
+function canUpdateTaskRow(user, projectCode, taskId) {
+  const level = getEffectiveTaskPermission(user, projectCode, taskId);
+  return !!level && PERMISSION_RANK[level] >= PERMISSION_RANK.UPDATE;
+}
+function canManageTaskRow(user, projectCode, taskId) {
+  const level = getEffectiveTaskPermission(user, projectCode, taskId);
+  return !!level && PERMISSION_RANK[level] >= PERMISSION_RANK.MANAGE;
+}
+// Dung cho giao dien (khoa input) va man hinh quan tri ("x/y task"): tra ve
+// null neu KHONG bi gioi han (tat ca task cua du an nay deu sua duoc dung
+// muc quyen du an), hoac mot Set<task_id> neu CO gioi han - chi cac task
+// trong Set moi duoc SUA (cap UPDATE tro len); cac task khac trong cung du
+// an van XEM duoc (do van con quyen VIEW tren ca du an) nhung khong sua duoc.
+function restrictedTaskIdsFor(user, projectCode) {
+  if (!user || user.role === "admin" || user.role === "manager") return null;
+  const projectLevel = getProjectPermission(user, projectCode);
+  if (!projectLevel || projectLevel === "VIEW") return null;
+  const rows = getUserTaskPermissionRows(user.id, projectCode);
+  if (!rows.length) return null;
+  return new Set(
+    rows
+      .filter((r) => PERMISSION_RANK[r.permission_level] >= PERMISSION_RANK.UPDATE)
+      .map((r) => r.task_id)
+  );
+}
+
 module.exports = {
   ROLE_LABELS,
   PERMISSION_RANK,
@@ -169,5 +235,11 @@ module.exports = {
   canManageProjectFull,
   canDeleteProjectAcl,
   visibleProjectCodesFor,
+  getUserTaskPermissionRows,
+  getEffectiveTaskPermission,
+  canViewTask,
+  canUpdateTaskRow,
+  canManageTaskRow,
+  restrictedTaskIdsFor,
   bcrypt,
 };
