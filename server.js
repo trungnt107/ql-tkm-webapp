@@ -26,6 +26,10 @@ const {
   canManageProjectFull,
   canDeleteProjectAcl,
   visibleProjectCodesFor,
+  PERMISSION_RANK,
+  getUserTaskPermissionRows,
+  canUpdateTaskRow,
+  restrictedTaskIdsFor,
   bcrypt,
 } = require("./auth.js");
 
@@ -80,7 +84,17 @@ function now() {
   return new Date().toISOString();
 }
 function err(res, status, message) {
-  return res.status(status).json({ error: message });
+  // Giu nguyen field "error" (frontend hien tai - ca 3 trang HTML lan React
+  // bundle - deu chi doc j.error) de KHONG pha vo hanh vi cu; chi BO SUNG
+  // them 2 field "success"/"code" cho rieng loi 403 theo dung dinh dang
+  // thong nhat yeu cau o Giai doan 1 (khong anh huong gi den cac ma loi khac
+  // dang chay on dinh tu truoc).
+  const body = { error: message };
+  if (status === 403) {
+    body.success = false;
+    body.code = "FORBIDDEN";
+  }
+  return res.status(status).json(body);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,18 +265,30 @@ app.get("/api/users/:userId/projects", requireRole("admin"), (req, res) => {
        ORDER BY upp.project_code`
     )
     .all(userId);
+  // Giai doan 1: kem theo tom tat pham vi task ("x/y task") de man hinh
+  // quan tri hien thi dung nhu spec (cot "Phạm vi Task") - KHONG anh huong
+  // gi request nay neu du an chua tung co gioi han task nao (van tra ve
+  // "Toàn bộ" nhu truoc gio).
+  const totalTasksStmt = db.prepare("SELECT COUNT(*) c FROM project_progress_tasks WHERE project_code = ?");
+  const allowedTasksStmt = db.prepare("SELECT COUNT(*) c FROM user_task_permissions WHERE user_id = ? AND project_code = ?");
   res.json({
-    projects: rows.map((r) => ({
-      project_id: r.project_code,
-      project_code: r.project_code,
-      project_name: r.project_name,
-      parent_code: r.parent_code,
-      permission: r.permission_level,
-      permission_label: PERMISSION_LABELS[r.permission_level] || r.permission_level,
-    })),
+    projects: rows.map((r) => {
+      const total = totalTasksStmt.get(r.project_code).c;
+      const allowed = allowedTasksStmt.get(userId, r.project_code).c;
+      return {
+        project_id: r.project_code,
+        project_code: r.project_code,
+        project_name: r.project_name,
+        parent_code: r.parent_code,
+        permission: r.permission_level,
+        permission_label: PERMISSION_LABELS[r.permission_level] || r.permission_level,
+        task_total: total,
+        task_scope: allowed > 0 ? "CUSTOM" : "ALL",
+        task_allowed: allowed > 0 ? allowed : total,
+      };
+    }),
   });
-});
-app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
+});app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
   const userId = Number(req.params.userId);
   const u = findUserById(userId);
   if (!u) return err(res, 404, "Không tìm thấy người dùng.");
@@ -285,6 +311,13 @@ app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, re
   }
 
   const ts = now();
+  // Lay lai quyen CU truoc khi ghi de, chi de ghi audit log (muc 14) - khong
+  // dung de quyet dinh logic gi khac.
+  const before = db.prepare("SELECT project_code, permission_level FROM user_project_permissions WHERE user_id = ?").all(userId);
+  const beforeMap = {};
+  before.forEach((r) => (beforeMap[r.project_code] = r.permission_level));
+  const afterCodes = new Set(clean.map((it) => it.code));
+
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM user_project_permissions WHERE user_id = ?").run(userId);
@@ -294,12 +327,162 @@ app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, re
        ON CONFLICT(user_id, project_code) DO UPDATE SET permission_level = excluded.permission_level, updated_at = excluded.updated_at`
     );
     clean.forEach((it) => ins.run(userId, it.code, it.level, ts, ts));
+    // Du an nao bi BO HAN (khong con trong danh sach moi) thi don luon phan
+    // quyen task chi tiet (neu co) cua chinh du an do cho user nay - tranh
+    // du lieu "mo coi" khong con y nghia (user da mat het quyen tren du an
+    // do). Du an van con trong danh sach (du bi doi muc quyen) thi GIU
+    // nguyen phan quyen task cu - khong tu y xoa (muc quyen task da duoc
+    // gioi han khong the vuot qua muc quyen du an moi o moi lan kiem tra).
+    for (const code of Object.keys(beforeMap)) {
+      if (!afterCodes.has(code)) {
+        db.prepare("DELETE FROM user_task_permissions WHERE user_id = ? AND project_code = ?").run(userId, code);
+      }
+    }
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     return err(res, 500, "Lưu phân quyền dự án thất bại: " + e.message);
   }
+
+  // Audit log (muc 14): 1 dong lich su cho MOI du an co thay doi thuc su.
+  const afterMap = {};
+  clean.forEach((it) => (afterMap[it.code] = it.level));
+  const allCodes = new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)]);
+  allCodes.forEach((code) => {
+    const oldLevel = beforeMap[code] || null;
+    const newLevel = afterMap[code] || null;
+    if (oldLevel === newLevel) return;
+    db.prepare(
+      "INSERT INTO project_history (project_code, user_name, action, field_changed, old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?)"
+    ).run(
+      code,
+      req.user.display_name,
+      "permission_change",
+      "Phân quyền dự án của: " + u.display_name + " (" + u.username + ")",
+      oldLevel ? PERMISSION_LABELS[oldLevel] || oldLevel : "Không có quyền",
+      newLevel ? PERMISSION_LABELS[newLevel] || newLevel : "Không có quyền",
+      now()
+    );
+  });
+
   res.json({ ok: true, count: clean.length });
+});
+
+// ---------------------------------------------------------------------------
+// Giai doan 1 - Phan quyen chi tiet theo TUNG CONG VIEC/TASK trong 1 du an,
+// cho 1 nguoi dung cu the (chi Admin duoc xem/sua). Tan dung bang
+// project_progress_tasks (WBS) da co san lam danh sach "cong viec" de chon.
+// ---------------------------------------------------------------------------
+app.get("/api/users/:userId/projects/:code/task-permissions", requireRole("admin"), (req, res) => {
+  const userId = Number(req.params.userId);
+  const code = decodeURIComponent(req.params.code);
+  const u = findUserById(userId);
+  if (!u) return err(res, 404, "Không tìm thấy người dùng.");
+  const projRow = db.prepare("SELECT permission_level FROM user_project_permissions WHERE user_id = ? AND project_code = ?").get(userId, code);
+  const allTasks = progressBreakdownRowsFor(code);
+  if (!allTasks.length) return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết để phân quyền theo công việc.");
+  const grantedRows = getUserTaskPermissionRows(userId, code);
+  const grantedMap = {};
+  grantedRows.forEach((r) => (grantedMap[r.task_id] = r.permission_level));
+  res.json({
+    project_code: code,
+    project_permission: (u.role === "admin" || u.role === "manager") ? "FULL" : (projRow ? projRow.permission_level : null),
+    scope: grantedRows.length ? "CUSTOM" : "ALL",
+    tasks: allTasks.map((t) => ({
+      id: t.id,
+      stage_no: t.stage_no,
+      stage_name: t.stage_name,
+      stt: t.stt,
+      task_name: t.task_name,
+      allowed: grantedRows.length ? !!grantedMap[t.id] : true,
+      permission_level: grantedMap[t.id] || null,
+    })),
+  });
+});
+
+app.put("/api/users/:userId/projects/:code/task-permissions", requireRole("admin"), (req, res) => {
+  const userId = Number(req.params.userId);
+  const code = decodeURIComponent(req.params.code);
+  const u = findUserById(userId);
+  if (!u) return err(res, 404, "Không tìm thấy người dùng.");
+  if (u.role === "admin" || u.role === "manager") {
+    return err(res, 400, "Không áp dụng giới hạn theo công việc cho vai trò Quản trị viên/Quản lý (luôn toàn quyền).");
+  }
+  const projRow = db.prepare("SELECT permission_level FROM user_project_permissions WHERE user_id = ? AND project_code = ?").get(userId, code);
+  if (!projRow) {
+    return err(res, 400, "Người dùng này chưa được cấp quyền trên dự án này — hãy cấp quyền dự án trước khi giới hạn theo công việc.");
+  }
+  const projectLevel = projRow.permission_level;
+  if (projectLevel === "VIEW") {
+    return err(res, 400, 'Dự án đang ở mức "Chỉ xem" — không có gì để giới hạn thêm theo công việc (mức Chỉ xem không cho sửa bất kỳ công việc nào).');
+  }
+
+  const body = req.body || {};
+  const scope = body.scope === "custom" ? "custom" : "all";
+  const validTaskIds = new Set(progressBreakdownRowsFor(code).map((t) => t.id));
+  if (!validTaskIds.size) return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết.");
+
+  const before = getUserTaskPermissionRows(userId, code);
+  const beforeIds = before.map((r) => r.task_id).sort((a, b) => a - b);
+
+  let level = String(body.permission_level || projectLevel).toUpperCase();
+  if (!VALID_PERMISSION_LEVELS.includes(level)) {
+    return err(res, 400, `Mức quyền không hợp lệ: "${body.permission_level}".`);
+  }
+  // Quyen task KHONG DUOC VUOT quyen du an - tu choi thay vi tu am ha xuong,
+  // de admin biet ma sua lai lua chon cho dung (dung yeu cau muc 6/9/20).
+  if (PERMISSION_RANK[level] > PERMISSION_RANK[projectLevel]) {
+    return err(
+      res,
+      400,
+      `Mức quyền công việc ("${PERMISSION_LABELS[level] || level}") không được vượt quá mức quyền đã cấp trên dự án này ("${PERMISSION_LABELS[projectLevel] || projectLevel}").`
+    );
+  }
+
+  let taskIds = [];
+  if (scope === "custom") {
+    taskIds = Array.isArray(body.task_ids) ? body.task_ids.map(Number).filter((n) => Number.isFinite(n)) : [];
+    const invalid = taskIds.filter((id) => !validTaskIds.has(id));
+    if (invalid.length) {
+      return err(res, 400, `Công việc không thuộc dự án "${code}": id ${invalid.join(", ")}.`);
+    }
+  }
+
+  const ts = now();
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM user_task_permissions WHERE user_id = ? AND project_code = ?").run(userId, code);
+    if (scope === "custom" && taskIds.length) {
+      const ins = db.prepare(
+        `INSERT INTO user_task_permissions (user_id, project_code, task_id, permission_level, created_at, updated_at, created_by)
+         VALUES (?,?,?,?,?,?,?)`
+      );
+      taskIds.forEach((id) => ins.run(userId, code, id, level, ts, ts, req.user.display_name));
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    return err(res, 500, "Lưu phân quyền công việc thất bại: " + e.message);
+  }
+
+  // Audit log (muc 14).
+  const afterIds = scope === "custom" ? taskIds.slice().sort((a, b) => a - b) : [];
+  const taskNameById = {};
+  progressBreakdownRowsFor(code).forEach((t) => (taskNameById[t.id] = t.stt + ". " + t.task_name));
+  const fmtIds = (ids) => (ids.length ? ids.map((id) => taskNameById[id] || ("#" + id)).join(", ") : "Tất cả công việc");
+  db.prepare(
+    "INSERT INTO project_history (project_code, user_name, action, field_changed, old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?)"
+  ).run(
+    code,
+    req.user.display_name,
+    "task_permission_change",
+    "Phạm vi công việc của: " + u.display_name + " (" + u.username + ")",
+    fmtIds(beforeIds),
+    scope === "custom" ? fmtIds(afterIds) + " (mức " + (PERMISSION_LABELS[level] || level) + ")" : "Tất cả công việc",
+    now()
+  );
+
+  res.json({ ok: true, scope, task_ids: afterIds, permission_level: scope === "custom" ? level : null });
 });
 
 // ---------------------------------------------------------------------------
@@ -410,8 +593,7 @@ function computeTimelineForCode(code) {
   const totalDaysNeeded = elapsedDays / overall_progress;
   const projDate = new Date(startMs + totalDaysNeeded * 86400000).toISOString().slice(0, 10);
   return Object.assign({}, base, { status: "projected", completion_date: projDate, note: null });
-}
-// Gop "thoi gian hoan thanh" len cap DU AN TONG (cha): theo lua chon cua
+}// Gop "thoi gian hoan thanh" len cap DU AN TONG (cha): theo lua chon cua
 // nguoi dung, du an TONG duoc coi la hoan thanh khi TAT CA du an chi tiet
 // (con) cua no hoan thanh 100% -> Ngay hoan thanh cua du an TONG = ngay hoan
 // thanh (thuc te hoac du kien) MUON NHAT trong so cac du an con.
@@ -704,7 +886,6 @@ function logHistory(projectCode, userName, action, oldRow, newFields) {
   }
   if (!any) insert.run(projectCode, userName, "update", null, null, null, ts);
 }
-
 // ---------------------------------------------------------------------------
 // Sinh ma tu dong
 // ---------------------------------------------------------------------------
@@ -1029,7 +1210,6 @@ app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res
     err(res, 500, "Nhân bản thất bại: " + e.message);
   }
 });
-
 app.delete("/api/projects/:code", requireAuth, (req, res) => {
   const code = decodeURIComponent(req.params.code);
   const isFullRole = req.user.role === "admin" || req.user.role === "manager";
@@ -1079,7 +1259,18 @@ app.get("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
   if (!stages.length) {
     return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết (chỉ áp dụng cho dự án chi tiết lấy từ Excel gốc).");
   }
-  res.json({ code, stages, overall_progress, timeline: computeTimelineForCode(code) });
+  // Giai doan 1: neu admin da gioi han pham vi task cho user nay tren du an
+  // nay, tra ve danh sach task_id duoc SUA de FE khoa nhung dong con lai
+  // (chi con xem duoc, khong sua duoc) - null nghia la KHONG gioi han (sua
+  // duoc moi task, dung y het truoc day).
+  const restricted = restrictedTaskIdsFor(req.user, code);
+  res.json({
+    code,
+    stages,
+    overall_progress,
+    timeline: computeTimelineForCode(code),
+    editable_task_ids: restricted ? Array.from(restricted) : null,
+  });
 });
 
 app.put("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
@@ -1116,6 +1307,16 @@ app.put("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
       if (!id || Number.isNaN(pct)) {
         db.exec("ROLLBACK");
         return err(res, 400, `Dữ liệu không hợp lệ cho dòng id=${it.id}.`);
+      }
+      // Giai doan 1: kiem tra quyen o DUNG TUNG DONG cong viec - user co the
+      // co UPDATE tren ca du an nhung da bi admin gioi han chi duoc sua mot
+      // so task cu the (xem user_task_permissions/restrictedTaskIdsFor). Neu
+      // dong nay khong thuoc pham vi duoc cap -> tu choi CA REQUEST (khong
+      // luu mot phan) va bao ro id nao bi chan, giu dung tinh "tat ca hoac
+      // khong gi" cua 1 lan Luu nhu giao dien dang hoat dong.
+      if (!canUpdateTaskRow(req.user, code, id)) {
+        db.exec("ROLLBACK");
+        return err(res, 403, `Bạn không có quyền cập nhật công việc này (id=${id}).`);
       }
       pct = Math.max(0, Math.min(1, pct));
       const status = String(it.status || (pct >= 1 ? "Hoàn thành" : pct > 0 ? "Đang thực hiện" : "Chưa thực hiện"));
