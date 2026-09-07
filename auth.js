@@ -81,8 +81,16 @@ function requireRole() {
     next();
   };
 }
-// Nguoi phu trach chi duoc thao tac tren du an ho duoc gan (project_members);
-// admin/manager luon duoc phep.
+// [LEGACY / DEPRECATED - KHONG con duoc dung de quyet dinh quyen]
+// Ham nay doc bang project_members (co che phan quyen CU). Ke tu khi he
+// thong ACL moi (user_project_permissions / user_task_permissions, xem cac
+// ham ben duoi) duoc dua vao su dung, KHONG con noi nao trong server.js goi
+// ham nay de kiem tra quyen nua - nguon quyen chinh thuc duy nhat bay gio la
+// getProjectPermission()/canViewProject()/canUpdateProject()/
+// canManageProjectFull()/canDeleteProjectAcl() o duoi day. Ham nay duoc GIU
+// LAI nguyen trang (khong xoa) chi de tham khao/doi chieu lich su va tranh
+// lam vo bat ky cho nao (neu co) dang import no - KHONG duoc goi ham nay o
+// bat ky logic phan quyen moi nao trong tuong lai.
 function canEditProject(user, projectCode) {
   if (!user) return false;
   if (user.role === "admin" || user.role === "manager") return true;
