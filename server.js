@@ -1059,3 +1059,382 @@ app.post("/api/projects", requireRole("admin", "manager"), (req, res) => {
         "INSERT INTO projects (code, parent_code, name, source, version, created_at, updated_at, updated_by) VALUES (?,NULL,?,'form',1,?,?,?)"
       ).run(parentCode, payload.newParentName, now(), now(), req.user.display_name);
       logHistory(parentCode, req.user.display_name, "create", null, {});
+          }
+    if (!parentCode) {
+      db.exec("ROLLBACK");
+      return err(res, 400, "Thiếu Dự án tổng");
+    }
+    const childCode = nextChildCode(parentCode, payload.category);
+    const f = payloadToFields(payload);
+    db.prepare(
+      `INSERT INTO projects (code, parent_code, name, category, region, design_type, contractor, exec_year,
+        responsible_unit, responsible_person, priority_level, status, planned_km_or_station, budget_value,
+        contract_value, settlement_value, planned_start_date, planned_end_date, actual_start_date, actual_end_date,
+        volume_done, progress, cancel_flag, source, version, created_at, updated_at, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'form',1,?,?,?)`
+    ).run(
+      childCode, parentCode, f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
+      f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station, f.budget_value,
+      f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date, f.actual_start_date, f.actual_end_date,
+      f.volume_done, f.progress, f.cancel_flag, now(), now(), req.user.display_name
+    );
+    replaceTasks(childCode, payload.tasks);
+    replaceIssues(childCode, payload.issues, req.user.display_name);
+    replaceMaterials(childCode, payload.materials, req.user.display_name);
+    logHistory(childCode, req.user.display_name, "create", null, {});
+    db.exec("COMMIT");
+    broadcastChange({ code: childCode, action: "create", by: req.user.display_name });
+    res.json({ ok: true, child_code: childCode, parent_code: parentCode });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    err(res, 500, "Tạo dự án thất bại: " + e.message);
+  }
+});
+// Cac truong "quan trong" cua du an - chi sua duoc khi la admin/manager hoac
+// duoc cap quyen MANAGE/FULL tren du an do. Muc UPDATE chi duoc dong vao tien
+// do/trang thai/cac truong con lai (xem applyPermissionTierToFields).
+const PROJECT_CORE_FIELDS = [
+  "name", "category", "region", "design_type", "contractor", "exec_year",
+  "responsible_unit", "responsible_person", "priority_level",
+  "planned_km_or_station", "budget_value", "contract_value", "settlement_value",
+  "planned_start_date", "planned_end_date",
+];
+// Neu nguoi sua chi co quyen UPDATE (khong phai admin/manager/MANAGE/FULL):
+// giu nguyen cac truong "quan trong" nhu du lieu cu, chi cho phep di qua cac
+// thay doi ve tien do/trang thai/ngay thuc te - dung nhu dac ta "Cap nhat
+// tien do" (khong duoc doi thong tin quan trong cua du an).
+function applyPermissionTierToFields(f, row, tier) {
+  if (tier === "UPDATE") {
+    const restricted = Object.assign({}, f);
+    PROJECT_CORE_FIELDS.forEach((field) => {
+      restricted[field] = row[field];
+    });
+    return restricted;
+  }
+  return f; // admin/manager/MANAGE/FULL: toan quyen cac truong
+}
+
+app.put("/api/projects/:code", requireAuth, (req, res) => {
+  try {
+    const code = decodeURIComponent(req.params.code);
+    const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+    if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+
+    const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+    const level = isFullRole ? "FULL" : getProjectPermission(req.user, code);
+    if (!level || level === "VIEW") {
+      return err(res, 403, "Bạn không có quyền sửa dự án này.");
+    }
+    // Tuong duong "tier" dung de quyet dinh pham vi duoc sua: UPDATE = chi
+    // tien do/trang thai/vuong mac; MANAGE/FULL (hoac admin/manager) = toan
+    // quyen sua thong tin + cong viec + vat tu cua du an nay.
+    const tier = level === "UPDATE" ? "UPDATE" : "MANAGE";
+
+    const payload = req.body || {};
+    const clientVersion = payload.__version;
+    if (clientVersion != null && Number(clientVersion) !== row.version) {
+      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+    }
+    const f = applyPermissionTierToFields(payloadToFields(payload), row, tier);
+    // Neu du an nay da co "bang tien do chi tiet" (WBS, xem mo ta o
+    // computeProgressFromBreakdown), % hoan thanh PHAI luon duoc tinh tu
+    // bang do - bo qua gia tri "% hoan thanh" ma form chinh sua chung (thanh
+    // truot cu) gui len, de tranh 2 noi cung sua 1 con so gay lech nhau.
+    // Muon doi tien do cho du an loai nay, dung API
+    // PUT /api/projects/:code/progress-tasks (trang "Sua tien do chi tiet").
+    const breakdownProgress = computeProgressFromBreakdown(code);
+    if (breakdownProgress != null) f.progress = breakdownProgress;
+    const info = db
+      .prepare(
+        `UPDATE projects SET name=?, category=?, region=?, design_type=?, contractor=?, exec_year=?,
+          responsible_unit=?, responsible_person=?, priority_level=?, status=?, planned_km_or_station=?,
+          budget_value=?, contract_value=?, settlement_value=?, planned_start_date=?, planned_end_date=?,
+          actual_start_date=?, actual_end_date=?, volume_done=?, progress=?, cancel_flag=?,
+          version=version+1, updated_at=?, updated_by=?
+         WHERE code=? AND version=?`
+      )
+      .run(
+        f.name, f.category, f.region, f.design_type, f.contractor, f.exec_year,
+        f.responsible_unit, f.responsible_person, f.priority_level, f.status, f.planned_km_or_station,
+        f.budget_value, f.contract_value, f.settlement_value, f.planned_start_date, f.planned_end_date,
+        f.actual_start_date, f.actual_end_date, f.volume_done, f.progress, f.cancel_flag,
+        now(), req.user.display_name, code, row.version
+      );
+    if (info.changes === 0) {
+      return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+    }
+    // Muc UPDATE: khong duoc dong vao danh sach cong viec / vat tu, chi duoc
+    // cap nhat "vuong mac" (issues) nhu dac ta.
+    if (tier !== "UPDATE") {
+      replaceTasks(code, payload.tasks);
+      replaceMaterials(code, payload.materials, req.user.display_name);
+    }
+    replaceIssues(code, payload.issues, req.user.display_name);
+    logHistory(code, req.user.display_name, "update", row, f);
+    const newRow = db.prepare("SELECT version FROM projects WHERE code = ?").get(code);
+    broadcastChange({ code, action: "update", by: req.user.display_name });
+    res.json({ ok: true, child_code: code, version: newRow.version });
+  } catch (e) {
+    err(res, 500, "Cập nhật dự án thất bại: " + (IS_PROD ? "Đã có lỗi ở máy chủ." : e.message));
+  }
+});
+
+app.post("/api/projects/:code/clone", requireRole("admin", "manager"), (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const opts = req.body || {};
+  const source = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!source) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  const newCode = nextChildCode(source.parent_code, source.category);
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `INSERT INTO projects (code, parent_code, name, category, region, design_type, contractor, exec_year,
+        responsible_unit, responsible_person, priority_level, status, planned_km_or_station, budget_value,
+        contract_value, settlement_value, planned_start_date, planned_end_date, actual_start_date, actual_end_date,
+        volume_done, progress, cancel_flag, source, version, created_at, updated_at, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?, 'Chưa thực hiện', ?,?,?,?,?,?,NULL,NULL,NULL,0,'Không','form',1,?,?,?)`
+    ).run(
+      newCode, source.parent_code, source.name, source.category, source.region, source.design_type,
+      source.contractor, source.exec_year, source.responsible_unit, source.responsible_person, source.priority_level,
+      source.planned_km_or_station, source.budget_value, source.contract_value, source.settlement_value,
+      source.planned_start_date, source.planned_end_date,
+      now(), now(), req.user.display_name
+    );
+    if (opts.includeTasks) {
+      const tasks = taskRowsFor(code).map((t) => ({ ...t, pct_done: 0, status: "Chưa thực hiện" }));
+      replaceTasks(newCode, tasks);
+    }
+    if (opts.includeMaterials) {
+      const mats = db.prepare("SELECT * FROM project_materials WHERE project_code = ?").all(code);
+      replaceMaterials(
+        newCode,
+        mats.map((m) => ({ material_code: m.material_code, material_name: m.material_name, unit: m.unit, planned_qty: m.planned_qty, received_qty: null, used_qty: null, note: m.note })),
+        req.user.display_name
+      );
+    }
+    if (opts.includeIssues) {
+      const iss = db.prepare("SELECT * FROM project_issues WHERE project_code = ? AND status != 'Đã xử lý'").all(code);
+      replaceIssues(
+        newCode,
+        iss.map((i) => ({ content: i.content, cause: i.cause, severity: i.severity, coordination_unit: i.responsible_unit, responsible_person: i.responsible_person, due_date: i.due_date, status: i.status, note: i.note })),
+        req.user.display_name
+      );
+    }
+    logHistory(newCode, req.user.display_name, "clone", null, {});
+    db.exec("COMMIT");
+    broadcastChange({ code: newCode, action: "clone", by: req.user.display_name });
+    res.json({ ok: true, child_code: newCode });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    err(res, 500, "Nhân bản thất bại: " + e.message);
+  }
+});
+app.delete("/api/projects/:code", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+  if (!isFullRole && !canDeleteProjectAcl(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xóa dự án này.");
+  }
+  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!row.parent_code) {
+    const remaining = db.prepare("SELECT COUNT(*) c FROM projects WHERE parent_code = ? AND deleted_at IS NULL").get(code);
+    if (remaining.c > 0) {
+      return err(res, 400, "Dự án tổng này vẫn còn dự án chi tiết bên trong — hãy xóa hết dự án chi tiết trước.");
+    }
+  }
+  db.prepare("UPDATE projects SET deleted_at = ?, deleted_by = ? WHERE code = ?").run(now(), req.user.display_name, code);
+  logHistory(code, req.user.display_name, "delete", null, {});
+  broadcastChange({ code, action: "delete", by: req.user.display_name });
+  res.json({ ok: true });
+});
+
+app.get("/api/projects/:code/history", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const isFullRole = req.user.role === "admin" || req.user.role === "manager";
+  if (!isFullRole && !canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem lịch sử dự án này.");
+  }
+  const rows = db
+    .prepare("SELECT * FROM project_history WHERE project_code = ? ORDER BY id DESC LIMIT 200")
+    .all(code);
+  res.json({ history: rows });
+});
+
+// ---------------------------------------------------------------------------
+// Bang tien do CHI TIET (WBS) cua 1 du an chi tiet - xem/sua tung dau muc
+// cong viec (4 giai doan) de he thong tu tinh lai % hoan thanh chung, thay
+// vi phai keo tay thanh truot "% hoan thanh" nhu truoc. Quyen sua: giong het
+// quyen "Cap nhat tien do" (UPDATE) tro len - dung nhu ten muc quyen do.
+// ---------------------------------------------------------------------------
+app.get("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT code FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem dự án này.");
+  }
+  const { stages, overall_progress } = progressBreakdownGrouped(code);
+  if (!stages.length) {
+    return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết (chỉ áp dụng cho dự án chi tiết lấy từ Excel gốc).");
+  }
+  // Giai doan 1: neu admin da gioi han pham vi task cho user nay tren du an
+  // nay, tra ve danh sach task_id duoc SUA de FE khoa nhung dong con lai
+  // (chi con xem duoc, khong sua duoc) - null nghia la KHONG gioi han (sua
+  // duoc moi task, dung y het truoc day).
+  const restricted = restrictedTaskIdsFor(req.user, code);
+  res.json({
+    code,
+    stages,
+    overall_progress,
+    timeline: computeTimelineForCode(code),
+    editable_task_ids: restricted ? Array.from(restricted) : null,
+  });
+});
+
+app.put("/api/projects/:code/progress-tasks", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canUpdateProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền cập nhật tiến độ dự án này.");
+  }
+  const items = Array.isArray(req.body && req.body.tasks) ? req.body.tasks : null;
+  if (!items || !items.length) return err(res, 400, 'Dữ liệu không hợp lệ - cần một mảng "tasks": [{ id, status, pct_done }].');
+
+  // Ngay thang: chi nhan dinh dang "YYYY-MM-DD" (input type=date) hoac rong
+  // (= xoa ngay). Gia tri sai dinh dang -> tra ve loi (khong am tham bo qua),
+  // de nguoi dung biet ma sua lai.
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  function normDate(v) {
+    if (v === undefined || v === null || v === "") return null;
+    const s = String(v).trim();
+    return DATE_RE.test(s) ? s : false;
+  }
+
+  const upd = db.prepare(
+    `UPDATE project_progress_tasks
+       SET status = ?, pct_done = ?, planned_start = ?, planned_end = ?, actual_start = ?, actual_end = ?, updated_at = ?
+       WHERE id = ? AND project_code = ?`
+  );
+  const ts = now();
+  db.exec("BEGIN");
+  try {
+    for (const it of items) {
+      const id = Number(it.id);
+      let pct = Number(it.pct_done);
+      if (!id || Number.isNaN(pct)) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Dữ liệu không hợp lệ cho dòng id=${it.id}.`);
+      }
+      // Giai doan 1: kiem tra quyen o DUNG TUNG DONG cong viec - user co the
+      // co UPDATE tren ca du an nhung da bi admin gioi han chi duoc sua mot
+      // so task cu the (xem user_task_permissions/restrictedTaskIdsFor). Neu
+      // dong nay khong thuoc pham vi duoc cap -> tu choi CA REQUEST (khong
+      // luu mot phan) va bao ro id nao bi chan, giu dung tinh "tat ca hoac
+      // khong gi" cua 1 lan Luu nhu giao dien dang hoat dong.
+      if (!canUpdateTaskRow(req.user, code, id)) {
+        db.exec("ROLLBACK");
+        return err(res, 403, `Bạn không có quyền cập nhật công việc này (id=${id}).`);
+      }
+      pct = Math.max(0, Math.min(1, pct));
+      const status = String(it.status || (pct >= 1 ? "Hoàn thành" : pct > 0 ? "Đang thực hiện" : "Chưa thực hiện"));
+      const planned_start = normDate(it.planned_start);
+      const planned_end = normDate(it.planned_end);
+      const actual_start = normDate(it.actual_start);
+      const actual_end = normDate(it.actual_end);
+      if (planned_start === false || planned_end === false || actual_start === false || actual_end === false) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Ngày không hợp lệ ở dòng id=${id} (định dạng phải là YYYY-MM-DD).`);
+      }
+      const info = upd.run(status, pct, planned_start, planned_end, actual_start, actual_end, ts, id, code);
+      if (info.changes === 0) {
+        db.exec("ROLLBACK");
+        return err(res, 400, `Không tìm thấy dòng tiến độ id=${id} thuộc dự án "${code}".`);
+      }
+    }
+    const newProgress = computeProgressFromBreakdown(code);
+    if (newProgress != null) {
+      const info = db
+        .prepare("UPDATE projects SET progress = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE code = ? AND version = ?")
+        .run(newProgress, ts, req.user.display_name, code, row.version);
+      if (info.changes === 0) {
+        db.exec("ROLLBACK");
+        return err(res, 409, "Dữ liệu đã được người dùng khác cập nhật. Vui lòng tải lại trước khi lưu.");
+      }
+    }
+    db.exec("COMMIT");
+    logHistory(code, req.user.display_name, "update", row, { progress: newProgress });
+    broadcastChange({ code, action: "update", by: req.user.display_name });
+    res.json({ ok: true, code, progress: newProgress, timeline: computeTimelineForCode(code) });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    err(res, 500, "Cập nhật tiến độ chi tiết thất bại: " + (IS_PROD ? "Đã có lỗi ở máy chủ." : e.message));
+  }
+});
+
+// Thoi gian hoan thanh: dung chung cho ca DU AN CHI TIET (tinh tu bang WBS
+// cua chinh no) lan DU AN TONG (gop tu tat ca du an con - xem
+// computeParentTimeline). Chi can 1 endpoint, FE tu hien thi khac nhau theo
+// "is_parent".
+app.get("/api/projects/:code/timeline", requireAuth, (req, res) => {
+  const code = decodeURIComponent(req.params.code);
+  const row = db.prepare("SELECT * FROM projects WHERE code = ? AND deleted_at IS NULL").get(code);
+  if (!row) return err(res, 404, `Không tìm thấy dự án "${code}"`);
+  if (!canViewProject(req.user, code)) {
+    return err(res, 403, "Bạn không có quyền xem dự án này.");
+  }
+  if (!row.parent_code) {
+    const rollup = computeParentTimeline(code);
+    if (!rollup) return err(res, 404, "Dự án tổng này chưa có dự án chi tiết nào có bảng tiến độ chi tiết.");
+    return res.json(Object.assign({ code, is_parent: true }, rollup));
+  }
+  const timeline = computeTimelineForCode(code);
+  if (!timeline) return err(res, 404, "Dự án này chưa có bảng tiến độ chi tiết.");
+  res.json(Object.assign({ code, is_parent: false }, timeline));
+});
+
+app.post("/api/import/preview", requireAuth, (req, res) => {
+  err(res, 501, "Chức năng Nhập từ Excel chưa được hỗ trợ ở bản này. Vui lòng thêm/sửa từng dự án bằng form.");
+});
+app.post("/api/import/commit", requireAuth, (req, res) => {
+  err(res, 501, "Chức năng Nhập từ Excel chưa được hỗ trợ ở bản này.");
+});
+app.get("/api/export", requireAuth, (req, res) => {
+  res.json(buildBootstrap(req.user));
+});
+
+// ---------------------------------------------------------------------------
+// Trang tinh
+// ---------------------------------------------------------------------------
+app.get("/admin-users.html", requireRole("admin"), (req, res) => {
+  res.sendFile(ADMIN_HTML);
+});
+app.get("/progress-tasks.html", requireAuth, (req, res) => {
+  res.sendFile(PROGRESS_HTML);
+});
+app.get(/^\/(?!api\/).*/, (req, res) => {
+  res.sendFile(PUBLIC_HTML);
+});
+
+// API khong khop route nao o tren -> tra JSON 404 (thay vi trang HTML 404
+// mac dinh cua Express, de fetch() phia client luon parse duoc .json()).
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "Không tìm thấy API." });
+});
+
+// Loi bat bat ngo (unhandled) o bat ky route nao o tren: tra ve JSON gon
+// gang thay vi trang loi HTML mac dinh cua Express (rat de lo ca duong dan
+// file server that len nguoi dung/console trinh duyet o che do khong phai
+// production). Log day du ra console server de con debug.
+app.use((errObj, req, res, next) => {
+  console.error("Unhandled error:", errObj);
+  if (res.headersSent) return next(errObj);
+  res.status(500).json({
+    error: IS_PROD ? "Đã có lỗi xảy ra ở máy chủ." : String((errObj && errObj.message) || errObj),
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`QL TKM Web App đang chạy tại http://localhost:${PORT}`);
+});
