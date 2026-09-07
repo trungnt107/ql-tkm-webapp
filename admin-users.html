@@ -36,6 +36,14 @@
   .permrow .pname span{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .permrow select{width:170px;flex:none}
   .permrow input[type=checkbox]{width:16px;height:16px;flex:none}
+  .permrow .taskscope{flex:none}
+  .permrow .taskscope button{font-size:11.5px;padding:5px 9px}
+  .taskpanel{margin:0 12px 10px 38px;padding:10px 12px;background:#f8fafc;border:1px dashed var(--border);border-radius:8px;font-size:12.5px}
+  .taskpanel .taskopt{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .taskchecks{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 14px;max-height:180px;overflow:auto;margin:6px 0 10px 22px}
+  .taskchecks label{font-size:12.5px;font-weight:400;color:var(--text);display:flex;align-items:center;gap:6px;margin:0}
+  .taskchecks input{width:14px;height:14px}
+  .taskpanel .actions{display:flex;gap:8px;align-items:center}
 </style>
 </head>
 <body>
@@ -79,7 +87,10 @@
     <p class="muted">
       Chỉ áp dụng với vai trò "Người phụ trách"/"Người xem". Tick chọn dự án
       người này được tham gia, rồi chọn mức quyền cho từng dự án. Dự án không
-      được tick sẽ <b>không hiển thị</b> với người này khi họ đăng nhập.
+      được tick sẽ <b>không hiển thị</b> với người này khi họ đăng nhập. Với
+      các dự án ở mức "Cập nhật tiến độ" trở lên, có thể bấm nút
+      <b>🗂 Task</b> ở cuối dòng để giới hạn thêm — chỉ cho sửa một số công
+      việc cụ thể trong dự án đó (mặc định là được sửa toàn bộ công việc).
     </p>
     <div class="permlist" id="assignChips"></div>
     <div style="margin-top:12px;display:flex;gap:8px">
@@ -173,6 +184,12 @@ var PERM_OPTIONS = [
   {value:"FULL", label:"Toàn quyền dự án"},
 ];
 
+// Chi cac muc quyen tu UPDATE tro len moi co the gioi han them theo tung
+// cong viec (VIEW thi khong sua duoc gi nen khong co gi de gioi han).
+function levelSupportsTaskScope(level) {
+  return level === "UPDATE" || level === "MANAGE" || level === "FULL";
+}
+  
 function openAssign(user) {
   document.getElementById("assignPanel").style.display = "block";
   document.getElementById("assignUserName").textContent = user.display_name + " (" + user.username + ")";
@@ -184,10 +201,11 @@ function openAssign(user) {
   ]).then(function(res){
     allProjects = res[0].projects;
     var assignedMap = {};
-    (res[1].projects || []).forEach(function(p){ assignedMap[p.project_code] = p.permission; });
+    (res[1].projects || []).forEach(function(p){ assignedMap[p.project_code] = p; });
     chipsEl.innerHTML = "";
     allProjects.filter(function(p){ return p.parent_code; }).forEach(function(p){
-      var current = assignedMap[p.code] || "";
+      var info = assignedMap[p.code] || null;
+      var current = info ? info.permission : "";
       var row = document.createElement("div");
       row.className = "permrow";
       row.dataset.code = p.code;
@@ -209,11 +227,30 @@ function openAssign(user) {
       });
       sel.disabled = !cb.checked;
 
-      cb.onchange = function(){ sel.disabled = !cb.checked; };
+      var taskWrap = document.createElement("div");
+      taskWrap.className = "taskscope";
+      var taskBtn = document.createElement("button");
+      function taskBtnLabel() {
+        if (!info || info.task_scope === "ALL" || !levelSupportsTaskScope(sel.value)) return "🗂 Toàn bộ task";
+        return "🗂 " + info.task_allowed + "/" + info.task_total + " task";
+      }
+      taskBtn.textContent = taskBtnLabel();
+      taskBtn.disabled = !cb.checked || !levelSupportsTaskScope(sel.value);
+      taskWrap.appendChild(taskBtn);
+
+      cb.onchange = function(){
+        sel.disabled = !cb.checked;
+        taskBtn.disabled = !cb.checked || !levelSupportsTaskScope(sel.value);
+      };
+      sel.onchange = function(){
+        taskBtn.disabled = !cb.checked || !levelSupportsTaskScope(sel.value);
+      };
+      taskBtn.onclick = function(){ toggleTaskPanel(user, p, row, taskBtn); };
 
       row.appendChild(cb);
       row.appendChild(nameWrap);
       row.appendChild(sel);
+      row.appendChild(taskWrap);
       chipsEl.appendChild(row);
     });
     document.getElementById("btnSaveAssign").onclick = function(){
@@ -226,7 +263,7 @@ function openAssign(user) {
       api("/api/users/" + user.id + "/project-permissions", {method:"PUT", body: JSON.stringify({permissions: permissions})})
         .then(function(){
           document.getElementById("assignMsg").className = "msg ok";
-          document.getElementById("assignMsg").textContent = "Đã lưu phân quyền.";
+          document.getElementById("assignMsg").textContent = "Đã lưu phân quyền. (Nếu vừa hạ một dự án xuống \"Không có quyền\" hoặc \"Chỉ xem\", phạm vi công việc cũ của dự án đó cũng được dọn/không còn tác dụng.)";
         })
         .catch(function(e){
           document.getElementById("assignMsg").className = "msg err";
@@ -234,6 +271,97 @@ function openAssign(user) {
         });
     };
   });
+}
+
+// Mo/dong bang con chon "Tat ca task" / "Chon task cu the" ngay duoi 1 dong
+// du an trong bang phan quyen. Luu rieng (goi PUT .../task-permissions ngay
+// khi bam "Lưu phạm vi task"), doc lap voi nut "Lưu phân quyền" tong o duoi
+// cung (vi API pham vi task can quyen du an DA TON TAI truoc do trong CSDL).
+function toggleTaskPanel(user, project, row, btn) {
+  var existing = row.nextElementSibling;
+  if (existing && existing.classList && existing.classList.contains("taskpanel")) {
+    existing.remove();
+    return;
+  }
+  // Dong cac bang con khac dang mo (chi cho mo 1 cai tai 1 thoi diem, do gon).
+  Array.prototype.slice.call(document.querySelectorAll(".taskpanel")).forEach(function(p){ p.remove(); });
+
+  var panel = document.createElement("div");
+  panel.className = "taskpanel";
+  panel.textContent = "Đang tải danh sách công việc...";
+  row.parentNode.insertBefore(panel, row.nextSibling);
+
+  api("/api/users/" + user.id + "/projects/" + encodeURIComponent(project.code) + "/task-permissions")
+    .then(function(d){
+      panel.innerHTML = "";
+      var title = document.createElement("div");
+      title.style.marginBottom = "8px";
+      title.innerHTML = "<b>Phạm vi công việc — " + project.code + "</b> <span class='muted'>(mức quyền áp dụng cho công việc được chọn: cùng mức đã chọn ở trên cho dự án này, hoặc thấp hơn)</span>";
+      panel.appendChild(title);
+
+      var optAll = document.createElement("label");
+      optAll.className = "taskopt";
+      var rAll = document.createElement("input"); rAll.type = "radio"; rAll.name = "scope_" + project.code; rAll.value = "all";
+      optAll.appendChild(rAll); optAll.appendChild(document.createTextNode(" Tất cả công việc"));
+
+      var optCustom = document.createElement("label");
+      optCustom.className = "taskopt";
+      var rCustom = document.createElement("input"); rCustom.type = "radio"; rCustom.name = "scope_" + project.code; rCustom.value = "custom";
+      optCustom.appendChild(rCustom); optCustom.appendChild(document.createTextNode(" Chọn công việc cụ thể"));
+
+      panel.appendChild(optAll);
+      panel.appendChild(optCustom);
+
+      var checksWrap = document.createElement("div");
+      checksWrap.className = "taskchecks";
+      d.tasks.forEach(function(t){
+        var lb = document.createElement("label");
+        var cbx = document.createElement("input");
+        cbx.type = "checkbox"; cbx.value = t.id; cbx.checked = d.scope === "CUSTOM" ? t.allowed : false;
+        lb.appendChild(cbx);
+        lb.appendChild(document.createTextNode(t.stt + ". " + t.task_name));
+        checksWrap.appendChild(lb);
+      });
+      panel.appendChild(checksWrap);
+
+      function syncChecksEnabled() {
+        checksWrap.style.opacity = rCustom.checked ? "1" : ".45";
+        checksWrap.querySelectorAll("input").forEach(function(c){ c.disabled = !rCustom.checked; });
+      }
+      rAll.checked = d.scope !== "CUSTOM";
+      rCustom.checked = d.scope === "CUSTOM";
+      rAll.onchange = syncChecksEnabled;
+      rCustom.onchange = syncChecksEnabled;
+      syncChecksEnabled();
+
+      var actions = document.createElement("div");
+      actions.className = "actions";
+      var saveBtn = document.createElement("button");
+      saveBtn.className = "primary";
+      saveBtn.textContent = "Lưu phạm vi task";
+      var msg = document.createElement("span");
+      msg.className = "msg";
+      actions.appendChild(saveBtn);
+      actions.appendChild(msg);
+      panel.appendChild(actions);
+
+      saveBtn.onclick = function(){
+        var sel = row.querySelector("select");
+        var body = { scope: rCustom.checked ? "custom" : "all", permission_level: sel.value };
+        if (rCustom.checked) {
+          body.task_ids = Array.prototype.slice.call(checksWrap.querySelectorAll("input:checked")).map(function(c){ return Number(c.value); });
+        }
+        api("/api/users/" + user.id + "/projects/" + encodeURIComponent(project.code) + "/task-permissions", {method:"PUT", body: JSON.stringify(body)})
+          .then(function(r){
+            msg.className = "msg ok"; msg.textContent = "Đã lưu.";
+            btn.textContent = r.scope === "custom" ? ("🗂 " + r.task_ids.length + "/" + d.tasks.length + " task") : "🗂 Toàn bộ task";
+          })
+          .catch(function(e){ msg.className = "msg err"; msg.textContent = e.message; });
+      };
+    })
+    .catch(function(e){
+      panel.textContent = e.message;
+    });
 }
 document.getElementById("btnCancelAssign").addEventListener("click", function(){
   document.getElementById("assignPanel").style.display = "none";
