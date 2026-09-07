@@ -48,6 +48,9 @@
   .badge.warn{background:var(--warnbg);color:var(--warn)}
   .badge.bad{background:var(--badbg);color:var(--bad)}
   .rollupTable td, .rollupTable th{white-space:nowrap}
+  tr.rowLocked{opacity:.55}
+  tr.rowLocked td{background:#fafafa}
+  .lockNote{color:var(--muted);font-size:11px;font-weight:600}
 </style>
 </head>
 <body>
@@ -174,8 +177,7 @@ function fillPicker(items, allowParentSelect) {
   var placeholder = document.createElement("option");
   placeholder.value = ""; placeholder.textContent = "— Chọn dự án —";
   sel.appendChild(placeholder);
-
-  var byParent = {};
+    var byParent = {};
   items.forEach(function(it){
     var pc = it.parent_code || "(?)";
     if (!byParent[pc]) byParent[pc] = { parent_name: it.parent_name || pc, children: [] };
@@ -333,14 +335,31 @@ function renderTimelineBox(timeline) {
   }
 }
 
-function renderStages(data) {
+// null = khong bi gioi han (sua duoc moi cong viec, dung nhu truoc gio).
+// Mang [] hoac co phan tu = CHI duoc sua dung nhung id nam trong day - cac
+// dong khac van hien thi (de xem) nhung khoa het cac o nhap lieu.
+var editableTaskIds = null;
+  function renderStages(data) {
   currentCode = data.code;
+  editableTaskIds = Array.isArray(data.editable_task_ids) ? data.editable_task_ids : null;
   document.getElementById("rollupArea").style.display = "none";
   document.getElementById("editArea").style.display = "block";
   document.getElementById("savedTotal").textContent = "Lần lưu gần nhất: " + pct(data.overall_progress);
   renderTimelineBox(data.timeline);
+  if (editableTaskIds) {
+    var note = document.getElementById("pickerMsg");
+    // Khong ghi de loi neu dang co - chi thong bao noi khac, gon o day.
+  }
   var wrap = document.getElementById("stagesWrap");
   wrap.innerHTML = "";
+  if (editableTaskIds) {
+    var banner = document.createElement("div");
+    banner.className = "panel";
+    banner.style.background = "#fef3e0";
+    banner.style.borderColor = "#fbd38d";
+    banner.innerHTML = "<b>⚠ Phạm vi giới hạn:</b> bạn chỉ được <b>sửa</b> " + editableTaskIds.length + " công việc được quản trị viên cấp riêng trong dự án này (các công việc khác vẫn xem được nhưng ô nhập liệu bị khoá).";
+    wrap.appendChild(banner);
+  }
   data.stages.forEach(function(stage){
     var box = document.createElement("div");
     box.className = "panel";
@@ -358,9 +377,19 @@ function renderStages(data) {
     stage.tasks.forEach(function(t){
       var tr = document.createElement("tr");
       tr.dataset.id = t.id;
+      var locked = !!(editableTaskIds && editableTaskIds.indexOf(t.id) === -1);
+      if (locked) tr.classList.add("rowLocked");
 
       var tdStt = document.createElement("td"); tdStt.textContent = t.stt; tr.appendChild(tdStt);
-      var tdName = document.createElement("td"); tdName.className="taskname"; tdName.textContent = t.task_name; tr.appendChild(tdName);
+      var tdName = document.createElement("td"); tdName.className="taskname";
+      tdName.textContent = t.task_name;
+      if (locked) {
+        var lockSpan = document.createElement("div");
+        lockSpan.className = "lockNote";
+        lockSpan.textContent = "🔒 Chỉ xem";
+        tdName.appendChild(lockSpan);
+      }
+      tr.appendChild(tdName);
       var tdUnit = document.createElement("td"); tdUnit.className="muted"; tdUnit.textContent = t.unit || "—"; tr.appendChild(tdUnit);
       var tdW = document.createElement("td"); tdW.className="wpct"; tdW.textContent = pct(t.weight_pct); tr.appendChild(tdW);
 
@@ -371,6 +400,7 @@ function renderStages(data) {
         if (s === t.status) o.selected = true;
         selStatus.appendChild(o);
       });
+      selStatus.disabled = locked;
       tdStatus.appendChild(selStatus); tr.appendChild(tdStatus);
 
       var tdPct = document.createElement("td");
@@ -380,6 +410,7 @@ function renderStages(data) {
       // that su cua cac cong viec khac moi khi luu ca bang.
       inp.value = Math.round((t.pct_done||0)*100*100)/100;
       inp.dataset.weight = t.weight_pct;
+      inp.disabled = locked;
       tdPct.appendChild(inp);
       tdPct.appendChild(document.createTextNode(" %"));
       tr.appendChild(tdPct);
@@ -390,6 +421,7 @@ function renderStages(data) {
         d.type = "date";
         d.value = dateInputVal(value);
         d.dataset.field = fieldName;
+        d.disabled = locked;
         d.addEventListener("change", function(){ tr.classList.add("rowUnsaved"); });
         td.appendChild(d);
         return td;
@@ -476,12 +508,21 @@ document.getElementById("btnSave").addEventListener("click", function(){
   var rows = document.querySelectorAll("#stagesWrap tbody tr");
   var tasks = [];
   rows.forEach(function(tr){
+    // Dong bi khoa (ngoai pham vi task duoc cap) khong duoc gui len - gui
+    // len se bi server tu choi CA REQUEST (403), du gia tri cua no khong he
+    // bi doi. Bo qua o day de chi luu dung nhung cong viec minh duoc phep.
+    if (tr.classList.contains("rowLocked")) return;
     var sel = tr.querySelector("select");
     var inp = tr.querySelector("input[type=number]");
     var item = { id: Number(tr.dataset.id), status: sel.value, pct_done: Math.max(0, Math.min(100, Number(inp.value)||0)) / 100 };
     tr.querySelectorAll("input[type=date]").forEach(function(d){ item[d.dataset.field] = d.value || null; });
     tasks.push(item);
   });
+  if (!tasks.length) {
+    var m = document.getElementById("saveMsg");
+    m.className = "msg err"; m.textContent = "Bạn không có công việc nào được phép sửa trong dự án này.";
+    return;
+  }
   var msg = document.getElementById("saveMsg");
   msg.className = "msg"; msg.textContent = "Đang lưu...";
   var btn = document.getElementById("btnSave");
