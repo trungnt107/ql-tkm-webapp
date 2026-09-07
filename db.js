@@ -150,6 +150,32 @@ CREATE TABLE IF NOT EXISTS user_project_permissions (
 CREATE INDEX IF NOT EXISTS idx_upp_user ON user_project_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_upp_project ON user_project_permissions(project_code);
 
+-- Giai doan 1 (nang cap phan quyen theo TUNG CONG VIEC/TASK ben trong 1 du
+-- an). Bang nay la TUY CHON: mac dinh (khong co dong nao cho 1 cap
+-- user+project) nghia la user duoc thao tac tren TAT CA task cua du an do,
+-- dung muc quyen da cap o user_project_permissions (KHONG doi hanh vi dang
+-- chay). Chi khi admin chu dong gioi han ("Chon task cu the") thi moi co
+-- dong duoc them vao day - luc do user CHI duoc thao tac dung nhung task
+-- duoc liet ke, o day (mac dinh = bang dung muc quyen project, khong the
+-- vuot qua - xem rang buoc kiem tra o server.js/auth.js).
+-- task_id tham chieu project_progress_tasks(id) - day chinh la bang "cong
+-- viec/dau muc tien do" hien dang dung o trang "Sua tien do chi tiet".
+CREATE TABLE IF NOT EXISTS user_task_permissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_code TEXT NOT NULL REFERENCES projects(code) ON DELETE CASCADE,
+  task_id INTEGER NOT NULL REFERENCES project_progress_tasks(id) ON DELETE CASCADE,
+  permission_level TEXT NOT NULL CHECK(permission_level IN ('VIEW','UPDATE','MANAGE','FULL')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT,
+  UNIQUE(user_id, project_code, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_utp_user ON user_task_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_utp_project ON user_task_permissions(project_code);
+CREATE INDEX IF NOT EXISTS idx_utp_task ON user_task_permissions(task_id);
+CREATE INDEX IF NOT EXISTS idx_utp_user_project ON user_task_permissions(user_id, project_code);
+
 CREATE TABLE IF NOT EXISTS project_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_code TEXT,
