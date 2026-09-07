@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS project_materials (
 );
 CREATE INDEX IF NOT EXISTS idx_materials_project ON project_materials(project_code);
 
+-- [LEGACY / DEPRECATED] Co che phan quyen theo du an KIEU CU (chi co
+-- "duoc/khong duoc sua", khong phan biet muc do). KHONG con la nguon quyen
+-- chinh thuc - nguon quyen chinh thuc bay gio la user_project_permissions +
+-- user_task_permissions (xem chu thich o duoi). Bang nay va du lieu trong no
+-- duoc GIU NGUYEN (khong xoa bang, khong xoa du lieu) de tuong thich nguoc
+-- va co the doi chieu/khoi phuc neu can, nhung KHONG con duoc bat ky logic
+-- phan quyen nao trong server.js/auth.js su dung de cap quyen thuc te nua.
 CREATE TABLE IF NOT EXISTS project_members (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_code TEXT NOT NULL REFERENCES projects(code) ON DELETE CASCADE,
@@ -313,11 +320,24 @@ function seedIfNew() {
 }
 
 // ---------------------------------------------------------------------------
+// [LEGACY / DEPRECATED - CHI con giu lai de tham khao, KHONG con duoc goi
+// tu dong nua - xem ghi chu duoi cung file nay]
 // Nang cap du lieu cu (idempotent, an toan chay lai nhieu lan): moi ban ghi
 // project_members (phan cong kieu cu, chi co "duoc sua hay khong") duoc quy
 // doi sang 1 dong trong user_project_permissions voi muc UPDATE - dung bang
 // muc quyen chinh sua ma nguoi "phu trach" dang co truoc day, de khong ai bi
 // mat quyen dang dung khi nang cap len ban co ACL chi tiet nay.
+//
+// Ham nay da hoan thanh vai tro cua no: du lieu project_members tung ton tai
+// tu truoc khi co ACL da duoc dong bo sang user_project_permissions trong
+// nhung lan chay truoc day. TU LAN CAP NHAT HARDENING NAY TRO DI, ham nay
+// KHONG con duoc goi tu dong khi server khoi dong nua (xem cuoi file) - de
+// project_members khong con la con duong nao (ke ca gian tiep) co the tao
+// ra quyen moi trong he thong ACL chinh thuc. project_members va cac ban
+// ghi da ton tai trong bang KHONG bi xoa; ham nay chi khong con duoc GOI tu
+// dong. Neu that su can khoi phuc/dong bo lai thu cong, co the goi ham nay
+// truc tiep (vi du qua mot script rieng) - nhung day khong phai luong hoat
+// dong mac dinh cua ung dung nua.
 // ---------------------------------------------------------------------------
 function migrateLegacyMembersToPermissions() {
   const legacyRows = db.prepare("SELECT project_code, user_id FROM project_members").all();
@@ -399,7 +419,12 @@ function migrateProgressBreakdownFromExcel() {
 }
 
 seedIfNew();
-migrateLegacyMembersToPermissions();
+// [HARDENING] migrateLegacyMembersToPermissions() KHONG con duoc goi tu dong
+// o day nua - xem chu thich chi tiet ngay phia tren dinh nghia ham do. Du
+// lieu project_members va user_project_permissions da dong bo truoc day
+// khong bi anh huong (khong xoa gi ca); day chi la ngat duong dong bo TU
+// DONG trong tuong lai de project_members khong con kha nang tao them quyen
+// moi trong he thong ACL.
 migrateProgressBreakdownFromExcel();
 
 module.exports = { db };
