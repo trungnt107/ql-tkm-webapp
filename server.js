@@ -298,7 +298,8 @@ app.get("/api/users/:userId/projects", requireRole("admin"), (req, res) => {
       };
     }),
   });
-});app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
+});
+app.put("/api/users/:userId/project-permissions", requireRole("admin"), (req, res) => {
   const userId = Number(req.params.userId);
   const u = findUserById(userId);
   if (!u) return err(res, 404, "Không tìm thấy người dùng.");
@@ -603,7 +604,8 @@ function computeTimelineForCode(code) {
   const totalDaysNeeded = elapsedDays / overall_progress;
   const projDate = new Date(startMs + totalDaysNeeded * 86400000).toISOString().slice(0, 10);
   return Object.assign({}, base, { status: "projected", completion_date: projDate, note: null });
-}// Gop "thoi gian hoan thanh" len cap DU AN TONG (cha): theo lua chon cua
+}
+// Gop "thoi gian hoan thanh" len cap DU AN TONG (cha): theo lua chon cua
 // nguoi dung, du an TONG duoc coi la hoan thanh khi TAT CA du an chi tiet
 // (con) cua no hoan thanh 100% -> Ngay hoan thanh cua du an TONG = ngay hoan
 // thanh (thuc te hoac du kien) MUON NHAT trong so cac du an con.
@@ -930,7 +932,18 @@ app.get("/api/bootstrap", requireAuth, (req, res) => {
   res.json(buildBootstrap(req.user));
 });
 
-app.get("/api/next-code", requireAuth, (req, res) => {
+// [HARDENING] 2 API nay CHI phuc vu luong "Them du an" (sinh ma tu dong /
+// kiem tra trung ten truoc khi tao) - ma luong tao du an von da chi danh cho
+// admin/manager (xem requireRole o POST /api/projects ben duoi). Truoc ban
+// hardening nay, 2 API chi yeu cau requireAuth nen bat ky tai khoan da dang
+// nhap nao (ke ca "Nguoi xem" khong duoc cap quyen tren du an nao) cung goi
+// thang duoc de do ten/ma cac du an khac - rieng check-duplicate con tra ve
+// nguyen van ten+ma TAT CA du an con khop tu khoa, khong loc theo quyen xem
+// (ro ri du lieu nhe, dung nhu muc VIII quan ngai). Sieu lai dung nhom duoc
+// phep tao du an (admin/manager) - khong anh huong gi luong tao du an dang
+// chay cho 2 vai tro nay, va khong lien quan gi den bat ky chuc nang xem/sua
+// du an khac (progress, vat tu, vuong mac,...) cua responsible/viewer.
+app.get("/api/next-code", requireRole("admin", "manager"), (req, res) => {
   const { mode, parentCode, category } = req.query;
   if (mode === "parent") return res.json({ code: nextParentCode() });
   if (mode === "child") {
@@ -940,7 +953,7 @@ app.get("/api/next-code", requireAuth, (req, res) => {
   return err(res, 400, "mode không hợp lệ");
 });
 
-app.post("/api/check-duplicate", requireAuth, (req, res) => {
+app.post("/api/check-duplicate", requireRole("admin", "manager"), (req, res) => {
   const { child_name, parent_code } = req.body || {};
   const name = (child_name || "").trim().toLowerCase();
   if (!name) return res.json({ matches: [] });
