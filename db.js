@@ -472,4 +472,44 @@ seedIfNew();
 // moi trong he thong ACL.
 migrateProgressBreakdownFromExcel();
 
+// ---------------------------------------------------------------------------
+// [AN TOAN VOLUME - CHI SAO CHEP, KHONG XOA/GHI DE FILE DANG DUNG]
+// Phat hien qua log chan doan: Railway Volume co the dang duoc gan
+// (RAILWAY_VOLUME_MOUNT_PATH) o MOT THU MUC KHAC voi thu muc dang thuc su
+// chua DB_FILE (vi du Volume gan o "/data" nhung app dang mo DB o
+// "/app/data/qltkm.db") - nghia la Volume HIEN TAI KHONG bao ve du lieu
+// that; du lieu that dang nam tren dia TAM THOI cua container, se mat vao
+// lan deploy ke tiep neu khong xu ly truoc.
+//
+// De chuan bi an toan cho buoc sua "Mount Path" cua Volume tren Railway (sua
+// tu "/data" thanh dung thu muc dang chua DB_FILE) MA KHONG mat du lieu,
+// doan nay tu dong, moi lan khoi dong:
+//   1. Gop het du lieu con dang nam trong WAL vao file .db chinh (checkpoint)
+//      de dam bao ban sao la BAN DAY DU, khong thieu du lieu vua ghi gan day.
+//   2. Sao chep (KHONG xoa file goc dang dung) file .db chinh sang dung thu
+//      muc Volume dang duoc gan that su, giu NGUYEN TEN FILE - de sau khi
+//      sua Mount Path xong tren Railway, app se tu tim thay dung file nay.
+// Neu 2 duong dan da trung nhau roi (Volume da gan dung cho) thi TU DONG
+// KHONG lam gi ca - an toan de giu code nay lai vinh vien, deploy lai bao
+// nhieu lan cung duoc, khong anh huong hieu nang hay du lieu dang chay.
+// ---------------------------------------------------------------------------
+try {
+  const volumeMountPath = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+  const actualDbDir = path.dirname(DB_FILE);
+  if (volumeMountPath && fs.existsSync(volumeMountPath) && path.resolve(volumeMountPath) !== path.resolve(actualDbDir)) {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    const backupTarget = path.join(volumeMountPath, path.basename(DB_FILE));
+    fs.copyFileSync(DB_FILE, backupTarget);
+    console.log(
+      `[AN TOÀN VOLUME] Đã sao 1 bản DB hiện tại (đã gộp đủ dữ liệu WAL, không xoá file gốc đang dùng) sang đúng nơi Railway Volume đang thực sự được gắn: ${backupTarget}. ` +
+        `Sau khi bạn sửa Mount Path của Volume trên Railway thành "${actualDbDir}" và deploy lại, app sẽ tự tìm thấy đúng file này và KHÔNG bị mất dữ liệu.`
+    );
+  }
+} catch (e) {
+  console.warn(
+    "[AN TOÀN VOLUME] Không sao lưu được sang thư mục Volume (không ảnh hưởng gì đến database đang chạy, chỉ là bước chuẩn bị an toàn):",
+    e.message
+  );
+}
+
 module.exports = { db };
