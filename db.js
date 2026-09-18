@@ -56,6 +56,53 @@ const isNew = !fs.existsSync(DB_FILE);
   console.log("=============================================================");
 })();
 
+// ---------------------------------------------------------------------------
+// [PHÉP THỬ VOLUME - CHỈ DÙNG 1 FILE ĐÁNH DẤU RIÊNG, KHÔNG ĐỘNG ĐẾN qltkm.db]
+// Vì bản thân file qltkm.db đã được đóng gói sẵn trong code (git), nên việc
+// "thấy file DB đã tồn tại" ở log phía trên KHÔNG tự nó chứng minh được
+// Volume đang thực sự giữ lại dữ liệu qua các lần deploy - có thể chỉ là
+// file tĩnh được build lại y hệt mỗi lần. Khối này tạo 1 phép thử độc lập,
+// an toàn tuyệt đối với dữ liệu thật:
+//   - Mỗi lần khởi động, đọc file đánh dấu cũ (nếu có) và in ra mã ngẫu
+//     nhiên + thời điểm của LẦN CHẠY TRƯỚC.
+//   - Sau đó ghi đè 1 file đánh dấu MỚI với mã ngẫu nhiên khác.
+// Cách đọc kết quả: so sánh mã in ra ở log của lần deploy NÀY với mã đã in
+// ra ở log của lần deploy TRƯỚC đó.
+//   - Nếu TRÙNG mã  => thư mục này được giữ nguyên qua deploy => Volume
+//     đang bảo vệ đúng chỗ.
+//   - Nếu KHÔNG tìm thấy file đánh dấu (hoặc mã khác hẳn) ở một lần deploy
+//     thật sự mới (build lại từ Git) => thư mục này đang bị làm mới lại mỗi
+//     lần deploy => Volume CHƯA thực sự bảo vệ dữ liệu ở đường dẫn này.
+// ---------------------------------------------------------------------------
+(function volumePersistenceTest() {
+  try {
+    const markerPath = path.join(path.dirname(DB_FILE), ".railway_volume_test_marker.json");
+    console.log("---------- [PHÉP THỬ VOLUME - FILE ĐÁNH DẤU] ----------");
+    console.log("Đường dẫn file đánh dấu =", markerPath);
+    if (fs.existsSync(markerPath)) {
+      const old = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+      console.log(
+        "TÌM THẤY file đánh dấu từ LẦN CHẠY TRƯỚC =>",
+        JSON.stringify(old),
+        " => Nếu mã (marker) này TRÙNG với mã đã thấy ở log của lần deploy trước, nghĩa là Volume ĐANG bảo vệ đúng chỗ."
+      );
+    } else {
+      console.log(
+        "KHÔNG tìm thấy file đánh dấu nào từ trước => đây là lần đầu chạy phép thử này, HOẶC thư mục này vừa bị làm mới (reset) so với lần deploy trước."
+      );
+    }
+    const marker = { marker: Math.random().toString(36).slice(2, 10), written_at: new Date().toISOString() };
+    fs.writeFileSync(markerPath, JSON.stringify(marker));
+    console.log("Đã ghi file đánh dấu MỚI cho lần kiểm tra kế tiếp =>", JSON.stringify(marker));
+    console.log("--------------------------------------------------------");
+  } catch (e) {
+    console.warn(
+      "[PHÉP THỬ VOLUME] Không ghi/đọc được file đánh dấu (không ảnh hưởng gì đến database đang chạy, chỉ là bước kiểm tra thêm):",
+      e.message
+    );
+  }
+})();
+
 const db = new DatabaseSync(DB_FILE);
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
