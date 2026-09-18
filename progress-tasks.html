@@ -51,6 +51,42 @@
   tr.rowLocked{opacity:.55}
   tr.rowLocked td{background:#fafafa}
   .lockNote{color:var(--muted);font-size:11px;font-weight:600}
+  .quickpct{display:none;gap:5px;flex-wrap:wrap;margin-top:7px}
+  .quickpct button{padding:5px 9px;font-size:11px;border-radius:6px;background:#f1f4f9}
+  .quickpct button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  tr[data-status="Hoàn thành"]{border-left:4px solid var(--ok)}
+  tr[data-status="Đang thực hiện"]{border-left:4px solid var(--warn)}
+
+  /* ===== Chế độ điện thoại/máy tính bảng hẹp: chuyển bảng sang dạng card ===== */
+  @media (max-width: 768px){
+    main{margin:12px auto;padding:0 10px}
+    header{padding:12px 14px}
+    header div:first-child b{font-size:13.5px}
+    .panel{padding:13px}
+    .picker{flex-direction:column;align-items:stretch;gap:8px}
+    .picker>div{min-width:0}
+    .totalBox{gap:12px;padding:12px 14px}
+    .totalBox .big{font-size:21px}
+    .stageHead{flex-direction:column;align-items:flex-start;gap:2px}
+    table{display:block}
+    table thead{display:none}
+    table tbody{display:block}
+    table tr{display:block;border:1px solid var(--border);border-radius:10px;padding:4px 12px;margin-bottom:10px;background:#fff}
+    tr[data-status]{padding-left:9px}
+    table tr.rowLocked{background:#fafafa}
+    table td{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed #eef0f4;text-align:right}
+    table td:last-child{border-bottom:none}
+    table td::before{content:attr(data-label);font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;text-align:left;flex-shrink:0}
+    table td.taskname{display:block;text-align:left}
+    table td.taskname::before{display:block;margin-bottom:3px}
+    table td.taskname div{text-align:left}
+    input[type=number]{width:84px;font-size:14px;padding:8px 9px}
+    select{font-size:13.5px;padding:8px 9px}
+    input[type=date]{font-size:13px;padding:7px 8px}
+    .quickpct{display:flex}
+    button{padding:11px 16px;font-size:13.5px}
+    button.primary{width:100%}
+  }
 </style>
 </head>
 <body>
@@ -298,9 +334,9 @@ function renderRollup(data) {
     var bb = statusBadgeLabel(c.status);
     var tr = document.createElement("tr");
     tr.innerHTML =
-      "<td><a href=\"?code=" + encodeURIComponent(c.code) + "\">" + c.code + "</a></td>" +
-      "<td><span class='badge " + bb.cls + "'>" + bb.label + "</span></td>" +
-      "<td>" + fmtDate(c.completion_date) + "</td>";
+      "<td data-label=\"Dự án chi tiết\"><a href=\"?code=" + encodeURIComponent(c.code) + "\">" + c.code + "</a></td>" +
+      "<td data-label=\"Trạng thái\"><span class='badge " + bb.cls + "'>" + bb.label + "</span></td>" +
+      "<td data-label=\"Ngày hoàn thành\">" + fmtDate(c.completion_date) + "</td>";
     tbody.appendChild(tr);
   });
 }
@@ -379,9 +415,10 @@ var editableTaskIds = null;
       tr.dataset.id = t.id;
       var locked = !!(editableTaskIds && editableTaskIds.indexOf(t.id) === -1);
       if (locked) tr.classList.add("rowLocked");
+      tr.dataset.status = t.status || "";
 
-      var tdStt = document.createElement("td"); tdStt.textContent = t.stt; tr.appendChild(tdStt);
-      var tdName = document.createElement("td"); tdName.className="taskname";
+      var tdStt = document.createElement("td"); tdStt.dataset.label = "STT"; tdStt.textContent = t.stt; tr.appendChild(tdStt);
+      var tdName = document.createElement("td"); tdName.className="taskname"; tdName.dataset.label = "Công việc";
       tdName.textContent = t.task_name;
       if (locked) {
         var lockSpan = document.createElement("div");
@@ -390,10 +427,10 @@ var editableTaskIds = null;
         tdName.appendChild(lockSpan);
       }
       tr.appendChild(tdName);
-      var tdUnit = document.createElement("td"); tdUnit.className="muted"; tdUnit.textContent = t.unit || "—"; tr.appendChild(tdUnit);
-      var tdW = document.createElement("td"); tdW.className="wpct"; tdW.textContent = pct(t.weight_pct); tr.appendChild(tdW);
+      var tdUnit = document.createElement("td"); tdUnit.className="muted"; tdUnit.dataset.label = "Đơn vị"; tdUnit.textContent = t.unit || "—"; tr.appendChild(tdUnit);
+      var tdW = document.createElement("td"); tdW.className="wpct"; tdW.dataset.label = "Trọng số"; tdW.textContent = pct(t.weight_pct); tr.appendChild(tdW);
 
-      var tdStatus = document.createElement("td");
+      var tdStatus = document.createElement("td"); tdStatus.dataset.label = "Trạng thái";
       var selStatus = document.createElement("select");
       STATUS_OPTIONS.forEach(function(s){
         var o = document.createElement("option"); o.value = s; o.textContent = s;
@@ -403,7 +440,10 @@ var editableTaskIds = null;
       selStatus.disabled = locked;
       tdStatus.appendChild(selStatus); tr.appendChild(tdStatus);
 
-      var tdPct = document.createElement("td");
+      var tdPct = document.createElement("td"); tdPct.dataset.label = "% hoàn thành";
+      var pctWrap = document.createElement("div");
+      pctWrap.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;gap:2px";
+      var inpRow = document.createElement("div");
       var inp = document.createElement("input");
       inp.type = "number"; inp.min = 0; inp.max = 100; inp.step = "0.01";
       // Giu toi 2 chu so thap phan (vd 33.4%) de khong lam tron mat du lieu
@@ -411,12 +451,29 @@ var editableTaskIds = null;
       inp.value = Math.round((t.pct_done||0)*100*100)/100;
       inp.dataset.weight = t.weight_pct;
       inp.disabled = locked;
-      tdPct.appendChild(inp);
-      tdPct.appendChild(document.createTextNode(" %"));
+      inpRow.appendChild(inp);
+      inpRow.appendChild(document.createTextNode(" %"));
+      pctWrap.appendChild(inpRow);
+      // Nut chon nhanh % - chi hien tren man hinh hep (mobile), nhap 1 cham
+      // thay vi phai go so tren ban phim dien thoai. Khong doi logic tinh
+      // toan: chi set gia tri input roi goi dung ham applyPct() ben duoi,
+      // dung nhu khi nguoi dung tu go so.
+      var quick = document.createElement("div");
+      quick.className = "quickpct";
+      [0, 25, 50, 75, 100].forEach(function(v){
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = v + "%";
+        b.disabled = locked;
+        b.addEventListener("click", function(){ applyPct(v); });
+        quick.appendChild(b);
+      });
+      pctWrap.appendChild(quick);
+      tdPct.appendChild(pctWrap);
       tr.appendChild(tdPct);
 
-      function dateCell(fieldName, value) {
-        var td = document.createElement("td");
+      function dateCell(label, fieldName, value) {
+        var td = document.createElement("td"); td.dataset.label = label;
         var d = document.createElement("input");
         d.type = "date";
         d.value = dateInputVal(value);
@@ -426,14 +483,32 @@ var editableTaskIds = null;
         td.appendChild(d);
         return td;
       }
-      tr.appendChild(dateCell("planned_start", t.planned_start));
-      tr.appendChild(dateCell("planned_end", t.planned_end));
-      tr.appendChild(dateCell("actual_start", t.actual_start));
-      tr.appendChild(dateCell("actual_end", t.actual_end));
+      tr.appendChild(dateCell("Ngày BĐ (KH)", "planned_start", t.planned_start));
+      tr.appendChild(dateCell("Ngày KT (KH)", "planned_end", t.planned_end));
+      tr.appendChild(dateCell("Ngày BĐ (TT)", "actual_start", t.actual_start));
+      tr.appendChild(dateCell("Ngày KT (TT)", "actual_end", t.actual_end));
+
+      // applyPct(v): dat % = v (da kep trong [0,100]), dong bo trang thai va
+      // cac nut nhanh, danh dau dong da sua, tinh lai tong - dung chung cho
+      // ca truong hop go tay (input) lan bam nut nhanh (quickpct).
+      function applyPct(v) {
+        v = Math.max(0, Math.min(100, v));
+        inp.value = v;
+        if (v >= 100) selStatus.value = "Hoàn thành";
+        else if (v <= 0) selStatus.value = "Chưa thực hiện";
+        else selStatus.value = "Đang thực hiện";
+        tr.dataset.status = selStatus.value;
+        quick.querySelectorAll("button").forEach(function(b){
+          b.classList.toggle("active", Number(b.textContent) === v);
+        });
+        tr.classList.add("rowUnsaved");
+        recomputeLiveTotal();
+      }
 
       selStatus.addEventListener("change", function(){
         if (selStatus.value === "Hoàn thành" && Number(inp.value) < 100) inp.value = 100;
         if (selStatus.value === "Chưa thực hiện" && Number(inp.value) > 0) inp.value = 0;
+        tr.dataset.status = selStatus.value;
         tr.classList.add("rowUnsaved");
         recomputeLiveTotal();
       });
@@ -442,6 +517,10 @@ var editableTaskIds = null;
         if (v >= 100) selStatus.value = "Hoàn thành";
         else if (v <= 0) selStatus.value = "Chưa thực hiện";
         else selStatus.value = "Đang thực hiện";
+        tr.dataset.status = selStatus.value;
+        quick.querySelectorAll("button").forEach(function(b){
+          b.classList.toggle("active", Number(b.textContent) === v);
+        });
         tr.classList.add("rowUnsaved");
         recomputeLiveTotal();
       });
