@@ -11,6 +11,51 @@ const DB_FILE = path.join(__dirname, "data", "qltkm.db");
 const SEED_FILE = path.join(__dirname, "data", "seed_data.json");
 const isNew = !fs.existsSync(DB_FILE);
 
+// ---------------------------------------------------------------------------
+// [CHAN DOAN KHOI DONG - CHI GHI LOG, KHONG DOI HANH VI]
+// In ra Railway Logs (hoac console khi chay local) day du thong tin de biet
+// CHAC CHAN server dang mo file DB o dau va co dang bi "mat du lieu giua cac
+// lan deploy" hay khong - khong ghi/sua/xoa gi vao database ca, khong log bat
+// ky secret/token/mat khau nao. Dat TRUOC khi mo DatabaseSync() de kich thuoc
+// file/trang thai "da ton tai hay chua" phan anh dung THOI DIEM TRUOC khi mo
+// (mo SQLite se tu tao file moi neu chua co, nen phai kiem tra truoc do).
+// ---------------------------------------------------------------------------
+(function logStorageDiagnostics() {
+  const dataDir = path.join(__dirname, "data");
+  let dbSizeBytes = null;
+  try {
+    if (fs.existsSync(DB_FILE)) dbSizeBytes = fs.statSync(DB_FILE).size;
+  } catch {
+    // Bo qua loi doc kich thuoc file - khong lam gian doan qua trinh mo DB.
+  }
+  console.log("========== [CHAN DOAN LUU TRU - KHOI DONG SERVER] ==========");
+  console.log("process.cwd()              =", process.cwd());
+  console.log("__dirname (db.js)          =", __dirname);
+  console.log("DB_FILE                    =", DB_FILE);
+  console.log("Thư mục data/ tồn tại?     =", fs.existsSync(dataDir));
+  console.log(
+    "File DB đã tồn tại trước khi mở? =",
+    !isNew,
+    isNew ? "  => SẼ TẠO DATABASE MỚI + NẠP SEED (xem cảnh báo bên dưới nếu không phải lần đầu chạy)" : "  => mở file DB đã có sẵn, GIỮ NGUYÊN dữ liệu"
+  );
+  console.log("Kích thước file DB hiện tại =", dbSizeBytes === null ? "(chưa tồn tại / không đọc được)" : `${dbSizeBytes} bytes`);
+  console.log("RAILWAY_VOLUME_NAME        =", process.env.RAILWAY_VOLUME_NAME || "(không đặt)");
+  console.log("RAILWAY_VOLUME_MOUNT_PATH  =", process.env.RAILWAY_VOLUME_MOUNT_PATH || "(không đặt)");
+  console.log("RAILWAY_ENVIRONMENT        =", process.env.RAILWAY_ENVIRONMENT || "(không đặt - có thể đang chạy ngoài Railway)");
+  if (isNew) {
+    console.warn(
+      "CẢNH BÁO: Không tìm thấy file DB tại đường dẫn DB_FILE ở trên vào lúc " +
+        "khởi động - hệ thống sẽ coi đây là LẦN ĐẦU CHẠY và tạo database mới " +
+        "kèm nạp lại dữ liệu gốc từ data/seed_data.json. Nếu đây KHÔNG phải " +
+        "lần đầu chạy server (tức là trước đó server đã từng chạy và có dữ " +
+        "liệu thật), hãy DỪNG LẠI NGAY và kiểm tra cấu hình Railway Volume - " +
+        "rất có thể Volume chưa được gắn đúng vào thư mục data/ ở trên, dẫn " +
+        "đến việc mỗi lần deploy lại là một lần \"mất trắng\" dữ liệu cũ."
+    );
+  }
+  console.log("=============================================================");
+})();
+
 const db = new DatabaseSync(DB_FILE);
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
